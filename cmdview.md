@@ -51,9 +51,9 @@
 | # | Problem | Status |
 |---|---------|--------|
 | 4.1 | Brak `.dockerignore` (obraz puchnie o 50-80%) | ❌ |
-| 4.2 | Folder `external/` z 90 plikami `.exe` (Windows) | ❌ |
+| 4.2 | Folder `external/` z 90 plikami `.exe` (Windows) | ⏳ *(zachowany, udokumentowany w `external/README.md`)* |
 | 4.3 | `picamera2` na `python:3.11-slim` — działa po buildzie | ✅ *(zweryfikowane)* |
-| 4.4 | `/dev/dma_heap` w docker-compose.yml | ❌ |
+| 4.4 | `/dev/dma_heap` w docker-compose.yml — dodany komentarz o warunkowym montowaniu | ✅ |
 
 ## 5. 🟢 PROPOZYCIE ULEPSZEŃ
 
