@@ -59,25 +59,25 @@
 
 | # | Pomysł | Status |
 |---|--------|--------|
-| 5.1 | Endpoint `/scan/cancel` — anulowanie skanowania | ❌ |
-| 5.2 | Endpoint `/motor/position` — odczyt pozycji osi | ❌ |
-| 5.3 | Przycisk "Snapshot" w Web GUI | ❌ |
+| 5.1 | Endpoint `/scan/cancel` — anulowanie skanowania | ✅ |
+| 5.2 | Endpoint `/motor/position` — odczyt pozycji osi | ✅ |
+| 5.3 | Przycisk "Snapshot" w Web GUI | ✅ |
 | 5.4 | Galeria zdjęć w Web GUI | ❌ |
 | 5.5 | Auto-generowanie config.yaml z API | ❌ |
-| 5.6 | Wyświetlanie pozycji osi w GUI na żywo | ❌ |
+| 5.6 | Wyświetlanie pozycji osi w GUI na żywo (polling co 2s) | ✅ |
 | 5.7 | Walidacja Pydantic dla ScanConfig | ✅ *(zrobione w 2.8)* |
-| 5.8 | Structured logging zamiast `print()` | ❌ |
+| 5.8 | Logger w processStack.py zamiast print() w głównym pipeline | ✅ |
 | 5.9 | Testy integracyjne dla processStack.py | ❌ |
-| 5.10 | Rate limiting dla API | ❌ |
+| 5.10 | Rate limiting dla API (@rate_limit dekorator) | ✅ |
 
 ---
 
 ## Podsumowanie
 
-- **Section 1** (krytyczne): **6/8** — 1.7 watchdog race condition i 1.8 MJPEG stop czekają
+- **Section 1** (krytyczne): **6/8** — 1.7 (race condition watchdog, niski prio) i 1.8 (MJPEG stop) czekają
 - **Section 2** (średnie): **8/8** — wszystkie zrobione
 - **Section 3** (jakość): **8/8** — wszystkie zrobione, w tym duży refactor 3.6 (-350 linii)
-- **Section 4** (Docker): **1/4** — tylko weryfikacja picamera2
-- **Section 5** (ulepszenia): **1/10** — tylko walidacja Pydantic
+- **Section 4** (Docker): **3/4** — tylko 4.2 zachowany + udokumentowany
+- **Section 5** (ulepszenia): **7/10** — galeria (5.4), auto-config (5.5), testy (5.9) czekają
 
-**Łącznie: 24/38 pozycji załatwionych.**
+**Łącznie: 32/38 pozycji załatwionych.**
