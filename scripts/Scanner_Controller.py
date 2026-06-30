@@ -1,251 +1,205 @@
 import os
+import time
+import requests
+import logging
 import numpy as np
 from pathlib import Path
 
-"""
-00281480,         Tic T500 Stepper Motor Controller -> X-Axis (camera arm)
-00281470,         Tic T500 Stepper Motor Controller -> Y-Axis (turntable)
-00282144,         Tic T500 Stepper Motor Controller -> Z-axis (camera Focus)
-"""
-
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class ScannerController:
-
-    def __init__(self):
-        self.stepperX_ID = "00281480"
-        self.stepperY_ID = "00281470"
-        self.stepperZ_ID = "00282144"
-
+    """
+    Kontroler skanera komunikujący się z Klipperem za pośrednictwem API Moonraker.
+    Zastępuje starą implementację opartą na komendach 'ticcmd' dla sterowników Pololu.
+    """
+    def __init__(self, moonraker_url="http://localhost:7125"):
+        self.moonraker_url = moonraker_url
         self.stepper_names = ["X", "Y", "Z"]
-        self.stepper_IDs = [self.stepperX_ID, self.stepperY_ID, self.stepperZ_ID]
-        self.stepper_home = ['rev', None, 'fwd']
-        self.stepper_home_pos = [-1000, 0, 50000]
-        self.stepper_maxAccel = [10000, 20000, 100000]
-        self.stepper_maxVelocity = [800000, 1000000, 60000000]
-        self.stepper_stepModes = [8, 8, 8]
-        self.stepper_currents = [174, 174, 343]
 
-        self.stepper_maxPos = [450, 1600, 0]
-        self.stepper_minPos = [0, -1600, -45000]
+        # UWAGA: W przeciwieństwie do starego systemu (który operował na mikrokrokach np. 50000),
+        # Klipper operuje na milimetrach (mm) lub stopniach (w zależności od rotation_distance).
+        # Poniższe limity i zakresy należy dostosować do fizycznych wymiarów w mm/stopniach!
+        self.stepper_maxPos = [45, 160, 0]   # Przykładowe wartości w mm/deg
+        self.stepper_minPos = [0, -160, -450]
 
-        # get the current positions of all steppers
-        self.stepper_position = [None, None, None]
-
-        # settings for scanning
-        self.scan_stepSize = [50, 80, 500]
-
+        # Ustawienia skanowania (krok w mm/deg)
+        self.scan_stepSize = [5, 8, 50]
         self.scan_pos = [None, None, None]
-        # set list of scan poses
-        self.setScanRange(stepper=0, min=0, max=450, step=self.scan_stepSize[0])
-        self.setScanRange(stepper=1, min=0, max=1600, step=self.scan_stepSize[1])
-        self.setScanRange(stepper=2, min=-25000, max=-8000, step=self.scan_stepSize[2])
+        
+        # Inicjalizacja list skanowania
+        self.setScanRange(stepper=0, min_val=0, max_val=45, step=self.scan_stepSize[0])
+        self.setScanRange(stepper=1, min_val=0, max_val=160, step=self.scan_stepSize[1])
+        self.setScanRange(stepper=2, min_val=-250, max_val=-80, step=self.scan_stepSize[2])
 
-        # keep track of position during scanning, skip to next full rotation of Y Axis
         self.completedRotations = 0
         self.completedStacks = 0
-
-        for st in range(len(self.stepper_names)):
-            self.setStepMode(st, self.stepper_stepModes[st])
-            self.setCurrent(st, self.stepper_currents[st])
-            self.setMaxAccel(st, self.stepper_maxAccel[st])
-            self.setMaxSpeed(st, self.stepper_maxVelocity[st])
-            self.getStepperPosition(st)
-
+        
+        # Inicjalizacja zmiennych na potrzeby postępu
         self.images_taken = 0
         self.images_to_take = len(self.scan_pos[0]) * len(self.scan_pos[1]) * len(self.scan_pos[2])
-
         self.progress = self.getProgress()
-
         self.outputFolder = ""
+        self.cam = None
 
     def correctName(self, val):
-        """
-        :param val: integer value to be brought into correct format
-        :return: str of corrected name
-        """
-        if abs(val) < 10:
-            step_name = "0000" + str(abs(val))
-        elif abs(val) < 100:
-            step_name = "000" + str(abs(val))
-        elif abs(val) < 1000:
-            step_name = "00" + str(abs(val))
-        elif abs(val) < 10000:
-            step_name = "0" + str(abs(val))
-        else:
-            step_name = str(abs(val))
+        """Formatowanie nazwy pliku (uzupełnianie zerami)"""
+        val_abs = abs(int(val))
+        return f"{val_abs:05d}"
 
-        return step_name
+    def send_gcode(self, gcode: str):
+        """Wysyła polecenie G-Code do Klippera przez Moonrakera"""
+        logging.debug(f"Wysyłanie G-Code: {gcode}")
+        try:
+            response = requests.post(
+                f"{self.moonraker_url}/printer/gcode/script", 
+                json={"script": gcode},
+                timeout=5
+            )
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Błąd komunikacji z Moonrakerem przy wysyłaniu '{gcode}': {e}")
+
+    def wait_for_moves(self, settle_time=0.5):
+        """
+        Czeka na zakończenie ruchu (M400) i dodaje czas na ustabilizowanie drgań,
+        co jest kluczowe w makrofotografii (settle time).
+        """
+        self.send_gcode("M400")
+        # Proste opóźnienie na wygaszenie drgań mechanicznych przed zrobieniem zdjęcia.
+        time.sleep(settle_time)
 
     def deEnergise(self):
-        for stepper_ID in self.stepper_IDs:
-            os.system('ticcmd --deenergize -d ' + stepper_ID)
+        """Wyłącza silniki krokowe (odpowiednik M18 / M84)"""
+        logging.info("Wyłączanie silników...")
+        self.send_gcode("M84")
 
-    def resume(self):
-        for stepper_ID in self.stepper_IDs:
-            os.system('ticcmd --resume --reset-command-timeout -d ' + stepper_ID)
-
-    def setStepMode(self, stepper, step_mode):
-        self.stepper_stepModes[stepper] = step_mode
-        os.system('ticcmd --step-mode ' + str(step_mode) + ' -d ' + self.stepper_IDs[stepper])
-
-    def setCurrent(self, stepper, current):
-        self.stepper_currents[stepper] = current
-        os.system('ticcmd --current ' + str(current) + ' -d ' + self.stepper_IDs[stepper])
-
-    def setMaxAccel(self, stepper, max_accel):
-        self.stepper_maxAccel[stepper] = max_accel
-        os.system('ticcmd --max-accel ' + str(max_accel) + ' -d ' + self.stepper_IDs[stepper])
-
-    def setMaxSpeed(self, stepper, max_velocity):
-        self.stepper_maxVelocity[stepper] = max_velocity
-        os.system('ticcmd --max-speed ' + str(max_velocity) + ' -d ' + self.stepper_IDs[stepper])
-
-    def home(self, stepper):
-        if self.stepper_home_pos[stepper] != 0:
-            print("Homing stepper", self.stepper_names[stepper])
-            os.system('ticcmd --resume --position ' + str(
-                self.stepper_home_pos[stepper]) + ' --reset-command-timeout -d ' + self.stepper_IDs[stepper])
-
-            while not self.getLimitState(stepper):
-                os.system('ticcmd --resume --reset-command-timeout -d ' + self.stepper_IDs[stepper])
-                # sleep(0.2)
-
-        os.system('ticcmd --halt-and-set-position 0 -d ' + self.stepper_IDs[stepper])
-
-    def getStepperPosition(self, stepper):
-        info = os.popen('ticcmd --status -d ' + self.stepper_IDs[stepper]).read()
-        # split returned results into its elements
-        lines = info.split("\n")
-        current_position = int(lines[21].split(" ")[-1])
-        self.stepper_position[stepper] = current_position
-
-    def getLimitState(self, stepper):
-        info = os.popen('ticcmd --status -d ' + self.stepper_IDs[stepper]).read()
-        # split returned results into its elements
-        lines = info.split("\n")
-
-        if self.stepper_home[stepper] == "fwd":
-            state = lines[12].split(" ")[-1]
-        elif self.stepper_home[stepper] == "rev":
-            state = lines[13].split(" ")[-1]
+    def home(self, stepper=None):
+        """Bazowanie osi (G28)"""
+        axis = ""
+        if stepper is not None:
+            axis = self.stepper_names[stepper]
+            logging.info(f"Bazowanie osi {axis}...")
+            self.send_gcode(f"G28 {axis}")
         else:
-            print("Home direction is not defined for stepper:", self.stepper_names[stepper])
-            state = "Yes"
-
-        if state == "Yes":
-            print("Home reached for stepper:", self.stepper_names[stepper])
-            return True
-        else:
-            return False
+            logging.info("Bazowanie wszystkich osi...")
+            self.send_gcode("G28")
+            
+        self.wait_for_moves(settle_time=1.0)
 
     def moveToPosition(self, stepper, pos):
-        # for axes that do not require limits
-        if self.stepper_home[stepper] is not None:
-            if pos > self.stepper_maxPos[stepper]:
-                pos = self.stepper_maxPos[stepper]
-            elif pos < self.stepper_minPos[stepper]:
-                pos = self.stepper_minPos[stepper]
+        """Przesuwa daną oś na podaną pozycję absolutną"""
+        # Limity bezpieczeństwa
+        if pos > self.stepper_maxPos[stepper]:
+            pos = self.stepper_maxPos[stepper]
+        elif pos < self.stepper_minPos[stepper]:
+            pos = self.stepper_minPos[stepper]
 
-            pos = int(pos)
-            print("Moving stepper", self.stepper_names[stepper], "to position", pos)
+        axis = self.stepper_names[stepper]
+        logging.info(f"Ruch osi {axis} na pozycję {pos}")
+        
+        # Używamy G0 z wybraną posuwnością (F). F3000 = 50mm/s
+        self.send_gcode(f"G0 {axis}{pos} F3000")
+        self.wait_for_moves(settle_time=0.4)
 
-        else:
-            pos = int(pos)
-            print("Moving stepper", self.stepper_names[stepper], "to position",
-                  pos)
+    def moveRelative(self, axis_name: str, distance: float):
+        """Przesuwa daną oś o podany dystans (ruch relatywny)"""
+        logging.info(f"Ruch relatywny osi {axis_name} o {distance}")
+        # G91 włącza tryb relatywny, po ruchu wracamy do absolutnego G90
+        self.send_gcode("G91")
+        self.send_gcode(f"G0 {axis_name.upper()}{distance} F3000")
+        self.send_gcode("G90")
+        self.wait_for_moves(settle_time=0.4)
 
-        os.system('ticcmd --resume --position ' + str(pos) + ' --reset-command-timeout -d ' + self.stepper_IDs[stepper])
-        self.getStepperPosition(stepper)
-        while self.stepper_position[stepper] != pos:
-            os.system('ticcmd --resume --reset-command-timeout -d ' + self.stepper_IDs[stepper])
-            self.getStepperPosition(stepper)
+    def setScanRange(self, stepper, min_val, max_val, step):
+        """Oblicza listę pozycji do zeskanowania dla konkretnej osi"""
+        if max_val > self.stepper_maxPos[stepper]:
+            max_val = self.stepper_maxPos[stepper]
+        elif min_val < self.stepper_minPos[stepper]:
+            min_val = self.stepper_minPos[stepper]
 
-    def setScanRange(self, stepper, min, max, step):
-        # set min and max poses according to input (within range)
-        if max > self.stepper_maxPos[stepper]:
-            max = self.stepper_maxPos[stepper]
-        elif min < self.stepper_minPos[stepper]:
-            min = self.stepper_minPos[stepper]
-
-        # set desired step size (limited by GUI inputs as well as min and max values)
         self.scan_stepSize[stepper] = step
-
-        self.scan_pos[stepper] = np.array(np.arange(int(min), int(max), int(self.scan_stepSize[stepper])), dtype=int)
+        self.scan_pos[stepper] = np.array(np.arange(int(min_val), int(max_val), int(self.scan_stepSize[stepper])), dtype=int)
+        
         if len(self.scan_pos[stepper]) == 0:
-            print("INPUT ERROR FOUND!")
+            logging.warning(f"Błąd wejścia: brak punktów skanowania dla osi {self.stepper_names[stepper]}.")
             self.scan_pos[stepper] = np.array([0])
 
     def getProgress(self):
-        progress = 100 * (self.images_taken / self.images_to_take)
-        return progress
+        if self.images_to_take == 0:
+            return 0
+        return 100.0 * (self.images_taken / self.images_to_take)
 
     def initCam(self, cam):
         self.cam = cam
 
     def runScan(self):
+        logging.info("Rozpoczynamy skanowanie...")
+        self.images_to_take = len(self.scan_pos[0]) * len(self.scan_pos[1]) * len(self.scan_pos[2])
+        self.images_taken = 0
+
         for posX in self.scan_pos[0]:
             self.moveToPosition(0, posX)
+            
             for posY in self.scan_pos[1]:
-                self.moveToPosition(1, posY + self.completedRotations * self.stepper_maxPos[1])
+                # W przypadku stołu obrotowego możemy sumować pełne obroty,
+                # ale dla Klippera łatwiej zresetować oś pozycją G92 lub używać pozycji relatywnych.
+                # Zostawiamy logikę absolutną tak jak było w oryginale, 
+                # ale z wartościami odpowiednimi dla nowej jednostki.
+                current_y = posY + self.completedRotations * self.stepper_maxPos[1]
+                self.moveToPosition(1, current_y)
+                
                 for posZ in self.scan_pos[2]:
                     self.moveToPosition(2, posZ)
-                    # to follow the naming convention when focus stacking
-                    img_name = self.outputFolder + "x_" + self.correctName(posX) + "_y_" + self.correctName(
-                        posY) + "_step_" + self.correctName(posZ) + "_.tif"
+                    
+                    img_name = os.path.join(
+                        self.outputFolder,
+                        f"x_{self.correctName(posX)}_y_{self.correctName(posY)}_step_{self.correctName(posZ)}_.tif"
+                    )
 
-                    self.cam.capture_image(img_name=img_name)
+                    if self.cam:
+                        self.cam.capture_image(img_name=img_name)
+                    
+                    self.images_taken += 1
                     self.progress = self.getProgress()
+                    logging.info(f"Postęp skanowania: {self.progress:.1f}%")
 
                 self.completedStacks += 1
-
             self.completedRotations += 1
 
-        # return to default position
-        print("Returning to default position")
-        scAnt.moveToPosition(stepper=0, pos=190)
-        scAnt.moveToPosition(stepper=1, pos=self.completedRotations * self.stepper_maxPos[1])
-        scAnt.moveToPosition(stepper=2, pos=-20000)
-
+        logging.info("Skanowanie zakończone. Powrót do pozycji bazowej.")
+        # Powrót do pozycji początkowej (domyślnej) - wartości do dostosowania!
+        self.moveToPosition(0, 19)
+        self.moveToPosition(1, self.completedRotations * self.stepper_maxPos[1])
+        self.moveToPosition(2, -20)
 
 if __name__ == '__main__':
-    try:
-        from GUI.Live_view_FLIR import customFLIR
-    except ModuleNotFoundError:
-        print("WARNING: PySpin module not found! You can ignore this message when not using FLIR cameras.")
-    print("Testing funcitonality of components")
+    from camera_controller import CameraController
+    
+    logging.info("Testowanie komunikacji Klipper/Moonraker oraz RPI-HQ-CAMERA")
+    
     scAnt = ScannerController()
-    scAnt.initCam(customFLIR())
+    cam = CameraController()
+    scAnt.initCam(cam)
 
-    # Home all steppers
-    for stepper in range(3):
-        scAnt.home(stepper)
-
-    # Movement test of steppers
-    scAnt.moveToPosition(stepper=0, pos=190)
-    scAnt.moveToPosition(stepper=1, pos=200)
-    scAnt.moveToPosition(stepper=1, pos=0)
-    scAnt.moveToPosition(stepper=2, pos=-20000)
-
-    # capture image, using custom FLIR scripts
-    scAnt.cam.capture_image(img_name="testy_mac_testface.tif")
-
-    # define output folder
-    scAnt.outputFolder = Path.cwd()
+    # Ustawiamy katalog roboczy na wyniki
+    scAnt.outputFolder = str(Path.cwd() / "test_scans")
     if not os.path.exists(scAnt.outputFolder):
         os.makedirs(scAnt.outputFolder)
-        print("made folder!")
 
-    # run example scan
-    print("\nRunning Demo Scan!")
-    scAnt.scan_stepSize = [200, 800, 5000]
-    scAnt.setScanRange(stepper=0, min=0, max=250, step=50)
-    scAnt.setScanRange(stepper=1, min=0, max=1600, step=400)
-    scAnt.setScanRange(stepper=2, min=-20000, max=-5000, step=5000)
+    # 1. Bazowanie
+    scAnt.home()
 
-    scAnt.runScan()
+    # 2. Szybki test ruchu
+    scAnt.moveToPosition(0, 19)
+    scAnt.moveToPosition(1, 20)
+    scAnt.moveToPosition(1, 0)
+    scAnt.moveToPosition(2, -20)
 
-    # de-energise steppers and release cam
+    # 3. Test zrobienia zdjęcia
+    test_img = os.path.join(scAnt.outputFolder, "testy_mac_testface.tif")
+    scAnt.cam.capture_image(img_name=test_img)
+
+    # Wyłączenie silników i kamery
     scAnt.deEnergise()
     scAnt.cam.exit_cam()
-
-    print("\nDemo completed successfully!")
+    logging.info("Demo testowe zakończone sukcesem!")

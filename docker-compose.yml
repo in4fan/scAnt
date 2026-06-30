@@ -1,0 +1,20 @@
+
+services:
+  scant_api:
+    build: .
+    container_name: scant_api
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      # Mapujemy zewnątrz (folder na hoście RPi) do wewnątrz kontenera (folder docelowy API)
+      # Dzięki temu zrobione skany nie znikną po usunięciu kontenera
+      - ./scans:/app/scans
+    devices:
+      # Mapowanie urządzeń sprzętowych Raspberry Pi do kontenera
+      - "/dev/vchiq:/dev/vchiq" # Stary interfejs komunikacji sprzętowej kamery w RPi
+      - "/dev/video0:/dev/video0" # Odbiór ramki V4L2 z kamery RPI-HQ
+      - "/dev/dma_heap:/dev/dma_heap" # Konieczne dla picamera2/libcamera do zarządzania pamięcią buforów graficznych
+    privileged: true
+    environment:
+      # Logi Pythonowe wyrzucane od razu na standardowe wyjście (Console-First Logging)
+      - PYTHONUNBUFFERED=1

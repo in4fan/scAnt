@@ -1,0 +1,21 @@
+services:
+  scant_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: scant_worker
+    restart: unless-stopped
+    volumes:
+      # Mapujemy zewnątrz (folder na hoście PC) do wewnątrz kontenera
+      - ./scans:/app/scans
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Jeżeli posiadasz GPU od NVIDIA na tym urządzeniu i zainstalowany nvidia-docker,
+    # odkomentuj poniższe 6 linii, aby przepuścić sprzęt do środka kontenera:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]

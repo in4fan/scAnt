@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>scAnt - Panel Kontrolny</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --panel-bg: rgba(30, 41, 59, 0.7);
+            --border-color: rgba(255, 255, 255, 0.1);
+            --text-color: #f8fafc;
+            --accent-color: #3b82f6;
+            --accent-hover: #2563eb;
+            --danger-color: #ef4444;
+            --danger-hover: #dc2626;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            padding: 2rem;
+            background-image: radial-gradient(circle at top right, #1e293b 0%, #0f172a 100%);
+        }
+
+        h1 { margin-bottom: 2rem; text-align: center; font-weight: 300; letter-spacing: 2px; }
+
+        .container {
+            display: flex;
+            gap: 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+            width: 100%;
+            flex-wrap: wrap;
+        }
+
+        .panel {
+            background: var(--panel-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.5rem;
+            flex: 1;
+            min-width: 300px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+        }
+
+        .camera-feed {
+            width: 100%;
+            border-radius: 8px;
+            background: #000;
+            aspect-ratio: 4/3;
+            object-fit: cover;
+            border: 1px solid var(--border-color);
+        }
+
+        .axis-control { margin-bottom: 1.5rem; }
+        .axis-control h3 { margin-bottom: 0.5rem; font-weight: 500; border-bottom: 1px solid var(--border-color); padding-bottom: 0.25rem; }
+        
+        .button-group {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+
+        button {
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            padding: 0.5rem 1rem;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            flex: 1;
+        }
+
+        button:hover { background: var(--accent-hover); transform: translateY(-1px); }
+        button:active { transform: translateY(1px); }
+
+        button.danger { background: var(--danger-color); margin-top: 1rem;}
+        button.danger:hover { background: var(--danger-hover); }
+
+        .status { margin-top: 1rem; font-size: 0.9rem; color: #94a3b8; text-align: center; min-height: 20px;}
+    </style>
+</head>
+<body>
+    <h1>scAnt - RIG CONTROL</h1>
+    <div class="container">
+        <!-- Kamera -->
+        <div class="panel">
+            <h2 style="margin-bottom: 1rem;">Podgląd na żywo (Ostrość)</h2>
+            <img src="/camera/stream" class="camera-feed" alt="Brak sygnału wideo" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiPjxyZWN0IHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiIGZpbGw9IiMzMyMiLz48dGV4dCB4PSI1MCUiIHk9IjUwJSIgZmlsbD0iI2ZmZiIgZG9taW5hbnQtYmFzZWxpbmU9Im1pZGRsZSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+QnJhayBzeWduYcWCdTwvdGV4dD48L3N2Zz4='">
+        </div>
+
+        <!-- Kontrolki -->
+        <div class="panel">
+            <h2 style="margin-bottom: 1rem;">Kontrola Silników</h2>
+            
+            <div class="axis-control">
+                <h3>Oś Z (Wózek Ostrości)</h3>
+                <div class="button-group">
+                    <button onclick="move('Z', -10)">-10</button>
+                    <button onclick="move('Z', -5)">-5</button>
+                    <button onclick="move('Z', -1)">-1</button>
+                    <button onclick="move('Z', 1)">+1</button>
+                    <button onclick="move('Z', 5)">+5</button>
+                    <button onclick="move('Z', 10)">+10</button>
+                </div>
+            </div>
+
+            <div class="axis-control">
+                <h3>Oś X (Ramię Kamery)</h3>
+                <div class="button-group">
+                    <button onclick="move('X', -5)">-5</button>
+                    <button onclick="move('X', -1)">-1</button>
+                    <button onclick="move('X', 1)">+1</button>
+                    <button onclick="move('X', 5)">+5</button>
+                </div>
+            </div>
+
+            <div class="axis-control">
+                <h3>Oś Y (Stół Obrotowy)</h3>
+                <div class="button-group">
+                    <button onclick="move('Y', -45)">-45°</button>
+                    <button onclick="move('Y', -10)">-10°</button>
+                    <button onclick="move('Y', 10)">+10°</button>
+                    <button onclick="move('Y', 45)">+45°</button>
+                </div>
+            </div>
+
+            <button onclick="homeAll()" style="width: 100%; margin-top: 1rem;">🏠 Bazuj Wszystkie Osie (Home)</button>
+            <button class="danger" onclick="disableMotors()" style="width: 100%;">🛑 Zwolnij Silniki (Ręczna Kalibracja)</button>
+
+            <div id="status" class="status">Gotowy</div>
+        </div>
+    </div>
+
+    <script>
+        const statusEl = document.getElementById('status');
+
+        function setStatus(msg) {
+            statusEl.innerText = msg;
+            setTimeout(() => { statusEl.innerText = 'Gotowy'; }, 3000);
+        }
+
+        async function move(axis, distance) {
+            try {
+                statusEl.innerText = `Przesuwanie ${axis} o ${distance}...`;
+                const res = await fetch('/motor/move', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ axis, distance })
+                });
+                const data = await res.json();
+                if(!res.ok) throw new Error(data.detail || 'Błąd');
+                setStatus(data.message);
+            } catch (err) {
+                setStatus('Błąd: ' + err.message);
+            }
+        }
+
+        async function homeAll() {
+            try {
+                statusEl.innerText = `Bazowanie osi...`;
+                const res = await fetch('/motor/home', { method: 'POST' });
+                const data = await res.json();
+                if(!res.ok) throw new Error(data.detail || 'Błąd');
+                setStatus(data.message);
+            } catch (err) {
+                setStatus('Błąd: ' + err.message);
+            }
+        }
+
+        async function disableMotors() {
+            try {
+                statusEl.innerText = `Zwalnianie silników...`;
+                const res = await fetch('/motor/disable', { method: 'POST' });
+                const data = await res.json();
+                if(!res.ok) throw new Error(data.detail || 'Błąd');
+                setStatus(data.message);
+            } catch (err) {
+                setStatus('Błąd: ' + err.message);
+            }
+        }
+    </script>
+</body>
+</html>
