@@ -43,7 +43,7 @@ def handler(job):
 
         # 2. Uruchomienie processStack.py (EDOF i Maskowanie)
         print(f"Uruchamianie processStack.py dla folderu {local_scan_dir}...")
-        run_command(["python", "processStack.py", "-i", local_scan_dir])
+        run_command(["python", "processStack.py", "-p", local_scan_dir])
 
         # 3. Wgrywanie przetworzonych danych z powrotem na wskazany remote
         remote_stacked_path = f"{remote_path}/{project}/stacked"
@@ -58,7 +58,7 @@ def handler(job):
         return {
             "status": "success", 
             "project": project, 
-            "message": f"Przetwarzanie EDOF zakończone pomyślnie. Wyniki zgrane do {s3_stacked_path}."
+            "message": f"Przetwarzanie EDOF zakończone pomyślnie. Wyniki zgrane do {remote_stacked_path}."
         }
 
     except Exception as e:

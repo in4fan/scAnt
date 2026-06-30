@@ -3,6 +3,7 @@
 
 import cv2
 import os
+import shutil
 
 from PIL import Image, ImageEnhance
 from skimage import measure
@@ -15,6 +16,7 @@ import argparse
 import queue
 import threading
 import time
+import subprocess
 
 basedir = os.path.dirname(__file__)
 
@@ -170,20 +172,12 @@ def process_stack(data, output_folder, path_to_external, params):
     
 
     if used_platform != "Linux" and params["use_experimental_stacking"]:
-        os.system(
-            str(path_to_external) + "\\focus-stack\\focus-stack " +
-            data + " --output=" + output_path
-        )
+        cmd = [str(path_to_external / "focus-stack" / "focus-stack")] + data.split() + ["--output=" + output_path]
+        subprocess.run(cmd, check=True)
     else:
-        if used_platform == "Linux":
-            os.system("align_image_stack -m -x -c 200 -a " + str(
-                temp_output_folder.joinpath(stack_name))
-                      + "OUT" + data)
-        else:
-            # use additional external files under windows to execute alignment via hugin
-            os.system(str(path_to_external) + "\\align_image_stack -m -x -c 200 -a " + str(
-                temp_output_folder.joinpath(stack_name))
-                      + "OUT" + data)
+        align_out_prefix = str(temp_output_folder.joinpath(stack_name)) + "OUT"
+        align_cmd = ["align_image_stack", "-m", "-x", "-c", "200", "-a", align_out_prefix] + data.split()
+        subprocess.run(align_cmd, check=True)
 
         image_str_focus = ""
         temp_files = []
@@ -210,22 +204,15 @@ def process_stack(data, output_folder, path_to_external, params):
         # --save-masks     to save soft and hard masks
         # --gray-projector=l-star alternative stacking method
 
-        if used_platform == "Linux":
-            os.system("enfuse --exposure-weight=0 --saturation-weight=0 --contrast-weight=1 " +
-                      "--hard-mask --contrast-edge-scale=1 --output=" +
-                      output_path + image_str_focus)
-        else:
-            os.system(str(path_to_external) + "\\enfuse --exposure-weight=0 --saturation-weight=0 --contrast-weight=1 " +
-                      "--hard-mask --contrast-edge-scale=1 --output=" +
-                      output_path + image_str_focus)
+        enfuse_cmd = ["enfuse", "--exposure-weight=0", "--saturation-weight=0",
+                       "--contrast-weight=1", "--hard-mask", "--contrast-edge-scale=1",
+                       "--output=" + output_path] + image_str_focus.split()
+        subprocess.run(enfuse_cmd, check=True)
 
         print("Stacked image saved as", output_path)
 
         for temp_img in temp_files:
-            if used_platform == "Linux":
-                os.system("rm " + str(temp_img))
-            else:
-                os.system("del " + str(temp_img))
+            Path(temp_img).unlink(missing_ok=True)
 
         print("Deleted temporary files of stack", data)
 
@@ -335,7 +322,7 @@ def stack_images(input_paths, check_focus, threshold=10.0, sharpen=False):
     for stack in stacks:
         stack_name = stack.split(" ")[1]
         stack_name = Path(stack_name).name[:-15]
-        os.rmdir(output_folder.joinpath(stack_name))
+        shutil.rmtree(output_folder.joinpath(stack_name), ignore_errors=True)
         print("removed  ...", stack_name)
 
     print("Stacking finalised!")
@@ -366,17 +353,15 @@ def filterOutSaltPepperNoise(edgeImg):
 
 
 def findSignificantContour(edgeImg):
-    try:
-        image, contours, hierarchy = cv2.findContours(
-            edgeImg,
-            cv2.RETR_TREE,
-            cv2.CHAIN_APPROX_SIMPLE)
-    except ValueError:
-        contours, hierarchy = cv2.findContours(
-            edgeImg,
-            cv2.RETR_TREE,
-            cv2.CHAIN_APPROX_SIMPLE)
+    # OpenCV 3.x returns (image, contours, hierarchy), 4.x returns (contours, hierarchy)
+    result = cv2.findContours(edgeImg, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    if len(result) == 3:
+        _, contours, hierarchy = result
+    else:
+        contours, hierarchy = result
 
+    if hierarchy is None or len(contours) == 0:
+        raise RuntimeError("Nie znaleziono żadnych konturów w obrazie")
 
     # Find level 1 contours (i.e. largest contours)
     level1Meta = []
@@ -393,6 +378,9 @@ def findSignificantContour(edgeImg):
         contour = contours[contourIndex]
         area = cv2.contourArea(contour)
         contoursWithArea.append([contour, area, contourIndex])
+
+    if not contoursWithArea:
+        raise RuntimeError("Nie znaleziono konturów poziomu 1")
 
     contoursWithArea.sort(key=lambda meta: meta[1], reverse=True)
     largestContour = contoursWithArea[0][0]
@@ -563,12 +551,7 @@ def createAlphaMask(data, edgeDetector, threadName=None, params = {
     cv2.imwrite(data[:-4] + '_contour.png', cutout)
     cutout = cv2.imread(data[:-4] + '_contour.png')
 
-    used_platform = platform.system()
-
-    if used_platform == "Linux":
-        os.system("rm " + data[:-4] + '_contour.png')
-    else:
-        os.system("del " + data[:-4] + '_contour.png')
+    Path(data[:-4] + '_contour.png').unlink(missing_ok=True)
 
     # cutout = cv2.imread(source, 1)  # TEMPORARY
 
@@ -816,7 +799,10 @@ if __name__ == "__main__":
                     t.join()
                 print("Exiting Main Thread")
 
-                cv2.destroyAllWindows()
+                try:
+                    cv2.destroyAllWindows()
+                except Exception:
+                    pass  # ignorowane w środowisku headless Docker
             else:
                 # if blurry images have been discarded already add all paths to "usable_images"
                 for image_path in all_image_paths:
@@ -831,7 +817,7 @@ if __name__ == "__main__":
                     print(path)
             else:
                 print("No images suitable for focus stacking found!")
-                exit()
+                sys.exit(1)
 
             # Check where the external files are located
             path_to_external = Path(basedir).joinpath("external")
@@ -1013,9 +999,25 @@ if __name__ == "__main__":
                     cutout_path = str(stacked_dir.joinpath(img))
                     write_exif_to_img(img_path=cutout_path, custom_exif_dict=exif)
         print("All images processed!\nExiting Main Thread")
-        exit()
+        sys.exit(0)
         
 
                         
     else:
-        print("No config file found in folder!")
+        print("Brak pliku .yaml w projekcie. Generuję domyślny config z parametrów CLI.")
+        config_file = "_default_config.yaml"
+        default_config = {
+            "stacking": {"threshold": args["threshold"] if args["threshold"] is not None else 10.0,
+                         "stack_images": True, "additional_sharpening": args["sharpen"]},
+            "masking": {"mask_thresh_min": args["mask_thresh_min"] if args["mask_thresh_min"] is not None else 175,
+                        "mask_thresh_max": args["mask_thresh_max"] if args["mask_thresh_max"] is not None else 215,
+                        "min_artifact_size_black": 1000, "min_artifact_size_white": 2000},
+            "exif_data": {"Make": "scAnt", "Model": "RPI-HQ-CAMERA",
+                          "SerialNumber": "", "Lens": "", "FocalLength": ""}
+        }
+        with open(project_dir / config_file, "w") as f:
+            import yaml
+            yaml.dump(default_config, f)
+        config_present = True
+        config_location = project_dir.joinpath(config_file)
+        config = ymlRW.read_config_file(config_location)

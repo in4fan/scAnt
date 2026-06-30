@@ -1,7 +1,7 @@
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import logging
 from scripts.Scanner_Controller import ScannerController
 from scripts.camera_controller import CameraController
@@ -40,6 +40,29 @@ class ScanConfig(BaseModel):
     z_min: int = -250
     z_max: int = -80
     z_step: int = 50
+
+    @field_validator("project_name")
+    @classmethod
+    def validate_project_name(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Nazwa projektu nie może być pusta")
+        return v.strip()
+
+    @field_validator("x_step", "y_step", "z_step")
+    @classmethod
+    def validate_step_positive(cls, v):
+        if v <= 0:
+            raise ValueError(f"Krok skanowania musi być > 0 (otrzymano {v})")
+        return v
+
+    @field_validator("x_max", "y_max", "z_max")
+    @classmethod
+    def validate_max_ge_min(cls, v, info):
+        axis = info.field_name.split("_")[0]
+        min_val = info.data.get(f"{axis}_min")
+        if min_val is not None and v <= min_val:
+            raise ValueError(f"{axis}_max ({v}) musi być większe niż {axis}_min ({min_val})")
+        return v
 
 # Flaga blokująca inne polecenia w trakcie skanowania
 is_scanning = False

@@ -32,7 +32,7 @@ WORKDIR /app
 # Instalacja bibliotek Pythona oraz paczki runpod
 RUN pip install --no-cache-dir \
     runpod \
-    opencv-python-headless \
+    opencv-contrib-python-headless \
     scikit-image \
     imutils \
     Pillow \

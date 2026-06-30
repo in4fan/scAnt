@@ -49,7 +49,7 @@ def write_exif_to_img(img_path, custom_exif_dict):
 
     print(complete_command)
 
-    subprocess.Popen(complete_command)
+    subprocess.run(complete_command, check=True)
 
 
 def get_default_values():

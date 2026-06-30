@@ -30,7 +30,7 @@ WORKDIR /app
 
 # Instalacja pakietów Pythonowych do przetwarzania obrazu
 RUN pip install --no-cache-dir \
-    opencv-python-headless \
+    opencv-contrib-python-headless \
     scikit-image \
     imutils \
     Pillow \

@@ -100,7 +100,7 @@ def process_data(args):
     cmd = [
         "docker", "compose", "-f", "docker-compose.worker.yml", 
         "exec", "scant_worker", 
-        "python", "processStack.py", "-i", f"scans/{args.project}"
+        "python", "processStack.py", "-p", f"scans/{args.project}"
     ]
     try:
         subprocess.run(cmd, check=True)

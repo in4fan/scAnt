@@ -26,6 +26,7 @@ RUN pip install --no-cache-dir \
     numpy \
     pydantic \
     picamera2 \
+    opencv-python-headless \
     pytest \
     httpx
 

@@ -43,8 +43,9 @@ class ScannerController:
 
     def correctName(self, val):
         """Formatowanie nazwy pliku (uzupełnianie zerami)"""
-        val_abs = abs(int(val))
-        return f"{val_abs:05d}"
+        val_int = int(val)
+        sign = "n" if val_int < 0 else "p"
+        return f"{sign}{abs(val_int):05d}"
 
     def send_gcode(self, gcode: str):
         """Wysyła polecenie G-Code do Klippera przez Moonrakera"""
@@ -118,11 +119,16 @@ class ScannerController:
             min_val = self.stepper_minPos[stepper]
 
         self.scan_stepSize[stepper] = step
+        if step <= 0:
+            logging.error(f"Krok skanowania dla osi {self.stepper_names[stepper]} musi być > 0 (otrzymano {step}).")
+            self.scan_pos[stepper] = np.array([min_val])
+            return
+
         self.scan_pos[stepper] = np.array(np.arange(int(min_val), int(max_val), int(self.scan_stepSize[stepper])), dtype=int)
         
         if len(self.scan_pos[stepper]) == 0:
-            logging.warning(f"Błąd wejścia: brak punktów skanowania dla osi {self.stepper_names[stepper]}.")
-            self.scan_pos[stepper] = np.array([0])
+            logging.warning(f"Błąd wejścia: brak punktów skanowania dla osi {self.stepper_names[stepper]} (min={min_val}, max={max_val}, step={step}).")
+            self.scan_pos[stepper] = np.array([min_val])
 
     def getProgress(self):
         if self.images_to_take == 0:
