@@ -29,12 +29,42 @@ import subprocess
 
 basedir = os.path.dirname(__file__)
 
+
+def parse_bool_arg(value):
+    if value is None:
+        return False  # Domyślnie False dla None
+    if isinstance(value, bool):
+        return value
+
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "t", "yes", "y", "on", ""}:
+        return True
+    if normalized in {"0", "false", "f", "no", "n", "off", "none"}:
+        return False
+
+    raise argparse.ArgumentTypeError(f"Nieprawidłowa wartość bool: {value}")
+
 def getThreads():
-    """ Returns the number of available threads on a posix/win based system """
-    if sys.platform == 'win32':
-        return int(os.environ['NUMBER_OF_PROCESSORS'])
-    else:
-        return int(os.popen('grep -c cores /proc/cpuinfo').read())
+    """Returns the number of available threads in a cross-platform, Docker-safe way."""
+    try:
+        # Najpierw spróbuj użyć os.cpu_count() (Python 3.4+)
+        return os.cpu_count() or 1
+    except Exception:
+        # Fallback dla starszych Pythona
+        if sys.platform == 'win32':
+            return int(os.environ.get('NUMBER_OF_PROCESSORS', 1))
+        else:
+            # W kontenerach Docker /proc/cpuinfo może nie być dostępny
+            # Użyj cgroups jeśli dostępny
+            try:
+                with open('/sys/fs/cgroup/cpu.max', 'r') as f:
+                    # Format: "max period period_usec usage_usec"
+                    parts = f.read().strip().split()
+                    if len(parts) >= 2 and parts[0].isdigit():
+                        return int(parts[0])
+            except Exception:
+                pass
+            return 1
 
 """
 Stacking Section
@@ -551,6 +581,11 @@ def createAlphaMask(data, edgeDetector, threadName=None, params = {
         print(img_jpg.shape)
         img_jpg[np.where((img_jpg == [255, 255, 255]).all(axis=2))] = [0, 0, 0]
         cv2.imwrite(data[:-4] + '_cutout.jpg', img_jpg)
+        
+        # Cleanup tymczasowego pliku _masked.png
+        temp_masked = data[:-4] + "_masked.png"
+        if os.path.exists(temp_masked):
+            os.remove(temp_masked)
 
 
 
@@ -586,28 +621,28 @@ if __name__ == "__main__":
     
     ap = argparse.ArgumentParser()
     ap.add_argument("-p", "--path", required=True, help="Path to scAnt project")
-    ap.add_argument("-s", "--stacking", default=True, help="stack RAW images [True / False] (True by default)")
-    ap.add_argument("-m", "--masking", default=True, help="mask stacked images [True / False] (True by default)")
-    ap.add_argument("-f", "--focus_check", default=False,
+    ap.add_argument("-s", "--stacking", type=parse_bool_arg, default=True, help="stack RAW images [True / False] (True by default)")
+    ap.add_argument("-m", "--masking", type=parse_bool_arg, default=True, help="mask stacked images [True / False] (True by default)")
+    ap.add_argument("-f", "--focus_check", type=parse_bool_arg, default=False,
                     help="check whether out-of-focus images should be discarded before stacking [True / False] (False by default)")
     ap.add_argument("-t", "--threshold", type=float,
                     help="focus measures that fall below this value will be considered 'blurry'")
-    ap.add_argument("-sh","--sharpen", default=False, help="help=apply sharpening to final result [True / False] (False by default)")
-    ap.add_argument("-c", "--create_cutout", default=False, 
+    ap.add_argument("-sh","--sharpen", type=parse_bool_arg, default=False, help="help=apply sharpening to final result [True / False] (False by default)")
+    ap.add_argument("-c", "--create_cutout", type=parse_bool_arg, default=False, 
                     help="create aditional cutout image that uses generated mask")
     ap.add_argument("-min", "--mask_thresh_min", type=float,
                     help="minimum RGB value of background for exclusion")
     ap.add_argument("-max", "--mask_thresh_max", type=float,
                     help="maximum RGB value of background for exclusion")
-    ap.add_argument("-meta", "--addmetadata", default=True, help="add camera metadata to images in stacked folder [True/ Fasle]")
-    ap.add_argument("-fr", "--full_resolution", type=bool, default=False,
+    ap.add_argument("-meta", "--addmetadata", type=parse_bool_arg, default=True, help="add camera metadata to images in stacked folder [True/ Fasle]")
+    ap.add_argument("-fr", "--full_resolution", type=parse_bool_arg, default=False,
                     help="enable to run masking on the full resolution image. By default all images are downscaled " +
                          "to 1024 x 1024 and the generated masks are up-scaled to the original image resolution.")
     ap.add_argument("-cl", "--CLAHE", type=float, default=1.0,
                     help="set the clip-limit for Contrast Limited Adaptive Histogram Equilisation")
-    ap.add_argument("-nc", "--nocrop", type=bool, default=False, help="save full image, including extapolated border data (False by default)")
-    ap.add_argument("-ex", "--use_experimental_stacking", type=bool, default=True, help="Use new stacking method")
-    ap.add_argument("-fr_align", "--full_resolution_align", type=bool, default=False, help="Use full resolution images in alignment (default max 2048 px)")
+    ap.add_argument("-nc", "--nocrop", type=parse_bool_arg, default=False, help="save full image, including extapolated border data (False by default)")
+    ap.add_argument("-ex", "--use_experimental_stacking", type=parse_bool_arg, default=True, help="Use new stacking method")
+    ap.add_argument("-fr_align", "--full_resolution_align", type=parse_bool_arg, default=False, help="Use full resolution images in alignment (default max 2048 px)")
     ap.add_argument("-jpg", "--jpgquality", help="Quality for saving in JPG format (0-100, default 95)")
 
     args = vars(ap.parse_args())
@@ -624,96 +659,7 @@ if __name__ == "__main__":
             config_file = file
     
 
-    if config_present:
-        config_location = project_dir.joinpath(config_file)
-
-        config = ymlRW.read_config_file(config_location)
-
-        #Read important post processing parameters - if not defined from cmd
-        if args["threshold"] is not None:
-            focus_threshold = float(args["threshold"])
-        else:
-            focus_threshold = float(config["stacking"]["threshold"])
-
-        #parse boolean args
-        if str(args["stacking"]).lower() == "false" or not args["stacking"]:
-            stack_check=False
-        else:
-            stack_check=True
-        if str(args["masking"]).lower() == "false" or not args["masking"]:
-            mask_check=False
-        else:
-            mask_check=True
-        if str(args["focus_check"]).lower() == "false" or not args["focus_check"]:
-            focus_check=False
-        else:
-            focus_check=True
-        if str(args["addmetadata"]).lower() == "false" or not args["addmetadata"]:
-            metadata_check = False
-        else:
-            metadata_check = True
-        if str(args["create_cutout"]).lower() == "true" or args["create_cutout"] is True:
-            args["create_cutout"] = True
-        else:
-            args["create_cutout"] = False
-        if str(args["sharpen"]).lower() == "true" or args["sharpen"] is True:
-            args["sharpen"] = True
-        else:
-            args["sharpen"] = False
-
-        # stack_method = config["stacking"]["stacking_method"]
-        exif = config["exif_data"]
-        
-        if args["mask_thresh_min"]:
-            pass
-        else:
-            args["mask_thresh_min"] = config["masking"]["mask_thresh_min"]
-        if args["mask_thresh_max"]:
-            pass
-        else:
-            args["mask_thresh_max"] = config["masking"]["mask_thresh_max"]
-
-        args["min_artifact_size_black"] = config["masking"]["min_artifact_size_black"]
-        args["min_artifact_size_white"] = config["masking"]["min_artifact_size_white"]
-
-        if stack_check:
-            print("Używam stack_images() z wielowątkowością...")
-            all_image_paths = [str(images / f) for f in os.listdir(images)]
-            num_cores = getThreads()
-            stack_images(all_image_paths, check_focus=focus_check, threshold=focus_threshold,
-                         sharpen=args["sharpen"], num_threads=num_cores)
-            print("Stacking finalised! Czas:", time.time() - start)
-
-        if mask_check:
-            print("Używam mask_images() z wielowątkowością...")
-            file_type = "tif"
-            mask_paths = sorted([p for p in paths.list_images(stacked_dir) if p[-3:] == file_type])
-            num_cores = getThreads()
-            mask_images(mask_paths, min_rgb=args["mask_thresh_min"], max_rgb=args["mask_thresh_max"],
-                        min_bl=args["min_artifact_size_black"], min_wh=args["min_artifact_size_white"],
-                        create_cutout=args["create_cutout"], num_threads=max(1, num_cores // 4))
-            print("Masking Done")
-
-        if metadata_check:
-
-            for img in os.listdir(str(stacked_dir)):
-                print(img)
-                if img[-4:] == ".tif" or img[-4:] == ".jpg":
-                    img_path = str(stacked_dir.joinpath(img))
-                    img_data = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
-                    cv2.imwrite(img_path, img_data)
-                    write_exif_to_img(img_path=img_path, custom_exif_dict=exif)
-
-                # Also write EXIF metadata to cutout images if they were generated
-                if args["create_cutout"] and img.endswith("_cutout.jpg"):
-                    cutout_path = str(stacked_dir.joinpath(img))
-                    write_exif_to_img(img_path=cutout_path, custom_exif_dict=exif)
-        print("All images processed!\nExiting Main Thread")
-        sys.exit(0)
-        
-
-                        
-    else:
+    if not config_present:
         print("Brak pliku .yaml w projekcie. Generuję domyślny config z parametrów CLI.")
         config_file = "_default_config.yaml"
         default_config = {
@@ -728,6 +674,60 @@ if __name__ == "__main__":
         with open(project_dir / config_file, "w") as f:
             import yaml
             yaml.dump(default_config, f)
-        config_present = True
-        config_location = project_dir.joinpath(config_file)
-        config = ymlRW.read_config_file(config_location)
+    
+    config_location = project_dir.joinpath(config_file)
+    config = ymlRW.read_config_file(config_location)
+
+    if args["threshold"] is not None:
+        focus_threshold = float(args["threshold"])
+    else:
+        focus_threshold = float(config["stacking"]["threshold"])
+
+    stack_check = args["stacking"]
+    mask_check = args["masking"]
+    focus_check = args["focus_check"]
+    metadata_check = args["addmetadata"]
+
+    exif = config["exif_data"]
+
+    if args["mask_thresh_min"] is None:
+        args["mask_thresh_min"] = config["masking"]["mask_thresh_min"]
+    if args["mask_thresh_max"] is None:
+        args["mask_thresh_max"] = config["masking"]["mask_thresh_max"]
+
+    args["min_artifact_size_black"] = config["masking"]["min_artifact_size_black"]
+    args["min_artifact_size_white"] = config["masking"]["min_artifact_size_white"]
+
+    if stack_check:
+        print("Używam stack_images() z wielowątkowością...")
+        all_image_paths = [str(images / f) for f in os.listdir(images)]
+        num_cores = getThreads()
+        stack_images(all_image_paths, check_focus=focus_check, threshold=focus_threshold,
+                     sharpen=args["sharpen"], num_threads=num_cores)
+        print("Stacking finalised! Czas:", time.time() - start)
+
+    if mask_check:
+        print("Używam mask_images() z wielowątkowością...")
+        file_type = "tif"
+        mask_paths = sorted([p for p in paths.list_images(stacked_dir) if p[-3:] == file_type])
+        num_cores = getThreads()
+        mask_images(mask_paths, min_rgb=args["mask_thresh_min"], max_rgb=args["mask_thresh_max"],
+                    min_bl=args["min_artifact_size_black"], min_wh=args["min_artifact_size_white"],
+                    create_cutout=args["create_cutout"], num_threads=max(1, num_cores // 4))
+        print("Masking Done")
+
+    if metadata_check:
+        for img in os.listdir(str(stacked_dir)):
+            print(img)
+            if img[-4:] == ".tif" or img[-4:] == ".jpg":
+                img_path = str(stacked_dir.joinpath(img))
+                img_data = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
+                cv2.imwrite(img_path, img_data)
+                write_exif_to_img(img_path=img_path, custom_exif_dict=exif)
+
+            if args["create_cutout"] and img.endswith("_cutout.jpg"):
+                cutout_path = str(stacked_dir.joinpath(img))
+                write_exif_to_img(img_path=cutout_path, custom_exif_dict=exif)
+
+    print("All images processed!\nExiting Main Thread")
+    sys.exit(0)

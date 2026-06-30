@@ -30,7 +30,7 @@ def handler(job):
     print(f"Rozpoczynanie przetwarzania dla projektu {project} ze źródła {remote_path}")
 
     local_scan_dir = f"/app/scans/{project}"
-    local_stacked_dir = f"/app/scans/stacked"
+    local_stacked_dir = f"{local_scan_dir}/stacked"
 
     if os.path.exists(local_scan_dir):
         shutil.rmtree(local_scan_dir)
@@ -47,13 +47,19 @@ def handler(job):
 
         # 3. Wgrywanie przetworzonych danych z powrotem na wskazany remote
         remote_stacked_path = f"{remote_path}/{project}/stacked"
-        print(f"Wgrywanie przetworzonych plików z {local_stacked_dir}/{project} do {remote_stacked_path}...")
+        print(f"Wgrywanie przetworzonych plików z {local_stacked_dir} do {remote_stacked_path}...")
         
-        output_folder = f"{local_stacked_dir}/{project}"
-        if os.path.exists(output_folder):
-            run_command(["rclone", "copy", output_folder, remote_stacked_path])
+        if os.path.exists(local_stacked_dir):
+            # Sprawdź czy są jakieś pliki w katalogu
+            if not os.listdir(local_stacked_dir):
+                raise FileNotFoundError(
+                    f"Folder ze sklejonymi zdjęciami jest pusty: {local_stacked_dir}"
+                )
+            run_command(["rclone", "copy", local_stacked_dir, remote_stacked_path])
         else:
-            print("Ostrzeżenie: Folder ze sklejonymi zdjęciami (stacked) nie został wygenerowany lub ma inną nazwę!")
+            raise FileNotFoundError(
+                f"Folder ze sklejonymi zdjęciami nie został wygenerowany: {local_stacked_dir}"
+            )
 
         return {
             "status": "success", 
@@ -70,8 +76,6 @@ def handler(job):
         print("Czyszczenie po zadaniu...")
         if os.path.exists(local_scan_dir):
             shutil.rmtree(local_scan_dir)
-        if os.path.exists(f"{local_stacked_dir}/{project}"):
-            shutil.rmtree(f"{local_stacked_dir}/{project}")
 
 # Uruchomienie Serverless
 if __name__ == "__main__":

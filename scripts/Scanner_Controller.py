@@ -7,6 +7,10 @@ from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+
+class HardwareCommunicationError(RuntimeError):
+    """Raised when communication with the motion controller fails."""
+
 class ScannerController:
     """
     Kontroler skanera komunikujący się z Klipperem za pośrednictwem API Moonraker.
@@ -60,6 +64,9 @@ class ScannerController:
             response.raise_for_status()
         except requests.exceptions.RequestException as e:
             logging.error(f"Błąd komunikacji z Moonrakerem przy wysyłaniu '{gcode}': {e}")
+            raise HardwareCommunicationError(
+                f"Nie udało się wysłać komendy do Moonrakera: {gcode}"
+            ) from e
 
     def wait_for_moves(self, settle_time=0.5):
         """
@@ -141,8 +148,11 @@ class ScannerController:
 
     def runScan(self):
         logging.info("Rozpoczynamy skanowanie...")
+        self.completedRotations = 0
+        self.completedStacks = 0
         self.images_to_take = len(self.scan_pos[0]) * len(self.scan_pos[1]) * len(self.scan_pos[2])
         self.images_taken = 0
+        self.progress = 0
         self.cancel_requested = False
 
         for posX in self.scan_pos[0]:
@@ -200,9 +210,9 @@ class ScannerController:
             data = resp.json()
             pos = data.get("result", {}).get("status", {}).get("gcode_move", {}).get("position", [None, None, None])
             return {"x": pos[0], "y": pos[1], "z": pos[2]}
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
             logging.error(f"Błąd odczytu pozycji z Moonrakera: {e}")
-            return {"x": None, "y": None, "z": None}
+            raise HardwareCommunicationError(f"Nie udało się odczytać pozycji: {e}") from e
 
 if __name__ == '__main__':
     from camera_controller import CameraController

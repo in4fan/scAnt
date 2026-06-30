@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 from functools import wraps
-from scripts.Scanner_Controller import ScannerController
+from scripts.Scanner_Controller import ScannerController, HardwareCommunicationError
 from scripts.camera_controller import CameraController
 import os
 from pathlib import Path
@@ -49,10 +49,32 @@ app = FastAPI(title="scAnt API", description="API do sterowania skanerem 3D scAn
 # Konfiguracja logowania (Console-First Logging)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Globalne instancje sprzętowe
-scAnt = ScannerController()
-cam = CameraController()
-scAnt.initCam(cam)
+_hardware_lock = threading.Lock()
+
+
+def _ensure_hardware():
+    with _hardware_lock:
+        scanner = getattr(app.state, "scanner", None)
+        camera = getattr(app.state, "camera", None)
+
+        if scanner is None or camera is None:
+            scanner = ScannerController()
+            camera = CameraController()
+            scanner.initCam(camera)
+            app.state.scanner = scanner
+            app.state.camera = camera
+        elif getattr(scanner, "cam", None) is None:
+            scanner.initCam(camera)
+
+        return scanner, camera
+
+
+def _get_scanner():
+    return _ensure_hardware()[0]
+
+
+def _get_camera():
+    return _ensure_hardware()[1]
 
 class ScanConfig(BaseModel):
     project_name: str
@@ -98,17 +120,26 @@ def _set_scanning(val: bool):
     with _scan_lock:
         _is_scanning = val
 
+
+def _try_start_scanning():
+    global _is_scanning
+    with _scan_lock:
+        if _is_scanning:
+            return False
+        _is_scanning = True
+        return True
+
 def scanning_in_progress():
     global _is_scanning
     with _scan_lock:
         return _is_scanning
 
 def run_scan_task(config: ScanConfig):
-    _set_scanning(True)
+    scAnt = _get_scanner()
     scAnt.cancel_requested = False
     try:
-        # Katalog docelowy
-        output_dir = Path.cwd() / "scans" / config.project_name
+        # Katalog docelowy - używamy SCANS_DIR dla spójności
+        output_dir = Path(SCANS_DIR) / config.project_name
         os.makedirs(output_dir, exist_ok=True)
         scAnt.outputFolder = str(output_dir) + "/"
         
@@ -121,7 +152,8 @@ def run_scan_task(config: ScanConfig):
         scAnt.home()
         scAnt.runScan()
         scAnt.deEnergise()
-        
+    except HardwareCommunicationError as e:
+        logging.error(f"Skanowanie przerwane błędem komunikacji sprzętowej: {e}")
     except Exception as e:
         logging.error(f"Skanowanie przerwane awarią: {e}")
     finally:
@@ -130,14 +162,19 @@ def run_scan_task(config: ScanConfig):
 
 @app.post("/scan/start")
 def start_scan(config: ScanConfig, background_tasks: BackgroundTasks):
-    if scanning_in_progress():
+    if not _try_start_scanning():
         raise HTTPException(status_code=400, detail="Skanowanie jest już w toku. Oczekuj na zakończenie.")
-    
-    background_tasks.add_task(run_scan_task, config)
+
+    try:
+        background_tasks.add_task(run_scan_task, config)
+    except Exception:
+        _set_scanning(False)
+        raise
     return {"message": f"Kolejkowano skanowanie projektu: {config.project_name}"}
 
 @app.get("/scan/status")
 def get_status():
+    scAnt = _get_scanner()
     return {
         "is_scanning": scanning_in_progress(),
         "progress_percent": round(scAnt.getProgress(), 2),
@@ -152,6 +189,7 @@ def capture_single_image(output_path: str = "test_image.tif"):
         raise HTTPException(status_code=400, detail="Zasób kamery zablokowany przez proces skanowania.")
     
     full_path = str(Path.cwd() / output_path)
+    cam = _get_camera()
     cam.capture_image(full_path)
     return {"message": "Zdjęcie zrobione testowo", "path": full_path}
 
@@ -160,7 +198,11 @@ def capture_single_image(output_path: str = "test_image.tif"):
 def home_motors():
     if scanning_in_progress():
         raise HTTPException(status_code=400, detail="Silniki zajęte przez proces skanowania.")
-    scAnt.home()
+    try:
+        scAnt = _get_scanner()
+        scAnt.home()
+    except HardwareCommunicationError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
     return {"message": "Zakończono bazowanie osi (G28)"}
 
 class MotorMoveRequest(BaseModel):
@@ -174,14 +216,22 @@ def move_motor(req: MotorMoveRequest):
         raise HTTPException(status_code=400, detail="Silniki zajęte przez proces skanowania.")
     if req.axis.upper() not in ["X", "Y", "Z"]:
         raise HTTPException(status_code=400, detail="Nieprawidłowa oś (tylko X, Y, Z).")
-    scAnt.moveRelative(req.axis, req.distance)
+    try:
+        scAnt = _get_scanner()
+        scAnt.moveRelative(req.axis, req.distance)
+    except HardwareCommunicationError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
     return {"message": f"Przesunięto oś {req.axis} o {req.distance}"}
 
 @app.post("/motor/disable")
 def disable_motors():
     if scanning_in_progress():
         raise HTTPException(status_code=400, detail="Silniki zajęte przez proces skanowania.")
-    scAnt.deEnergise()
+    try:
+        scAnt = _get_scanner()
+        scAnt.deEnergise()
+    except HardwareCommunicationError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
     return {"message": "Silniki odblokowane (M84)"}
 
 @app.post("/scan/cancel")
@@ -189,6 +239,7 @@ def cancel_scan():
     """Przerywa trwające skanowanie."""
     if not scanning_in_progress():
         raise HTTPException(status_code=400, detail="Brak aktywnego skanowania do anulowania.")
+    scAnt = _get_scanner()
     scAnt.cancel_requested = True
     logging.info("Żądanie anulowania skanowania przyjęte.")
     return {"message": "Skanowanie zostanie przerwane po zakończeniu bieżącego zdjęcia."}
@@ -196,10 +247,12 @@ def cancel_scan():
 @app.get("/motor/position")
 def motor_position():
     """Zwraca aktualną pozycję osi X/Y/Z z Moonrakera."""
+    scAnt = _get_scanner()
     return scAnt.get_position()
 
 import time
 def mjpeg_generator():
+    cam = _get_camera()
     while True:
         frame = cam.capture_jpeg_frame()
         if frame:

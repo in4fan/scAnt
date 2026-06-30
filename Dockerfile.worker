@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
     libimage-exiftool-perl \
     wget \
     rsync \
+    rclone \
     && add-apt-repository -y universe \
     && apt-get update \
     && apt-get install -y hugin-tools enblend enfuse \
@@ -35,7 +36,9 @@ RUN pip install --no-cache-dir \
     imutils \
     Pillow \
     numpy \
-    PyYAML
+    PyYAML \
+    runpod \
+    pytest
 
 # Kopiowanie kodu aplikacji
 COPY . /app

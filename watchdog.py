@@ -13,6 +13,9 @@ logging.basicConfig(
 
 logger = logging.getLogger("watchdog")
 
+# Konfiguracja adresu Moonrakera (konfigurowalny przez zmienną środowiskową)
+MOONRAKER_URL = os.environ.get("MOONRAKER_URL", "http://localhost:7125")
+
 # Globalny stan zdrowia urządzeń (eksponowany na zewnątrz)
 health_status = {
     "klipper": {
@@ -35,8 +38,8 @@ async def ping_klipper():
     async with httpx.AsyncClient(timeout=3.0) as client:
         while True:
             try:
-                # Domyślny port Moonrakera: 7125
-                resp = await client.get("http://localhost:7125/printer/info")
+                # Używamy konfigurowalnego URL Moonrakera
+                resp = await client.get(f"{MOONRAKER_URL}/printer/info")
                 if resp.status_code == 200:
                     health_status["klipper"]["status"] = "online"
                 else:
@@ -49,7 +52,7 @@ async def ping_klipper():
             health_status["klipper"]["last_check"] = time.time()
             
             if health_status["klipper"]["status"] != "online":
-                logger.warning(f"Klipper/Moonraker problem. Status: {health_status['klipper']['status']}")
+                logger.warning(f"Klipper/Moonraker problem. Status: {health_status['klipper']['status']}, URL: {MOONRAKER_URL}")
                 
             await asyncio.sleep(15)  # Sprawdzaj co 15 sekund
 

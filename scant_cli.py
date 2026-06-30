@@ -14,7 +14,7 @@ def start_scan(args):
     }
     
     try:
-        response = requests.post(f"{API_URL}/scan/start", json=payload)
+        response = requests.post(f"{API_URL}/scan/start", json=payload, timeout=30)
         response.raise_for_status()
         print(f"SUKCES: {response.json()['message']}")
         
@@ -33,7 +33,7 @@ def start_scan(args):
 
 def get_status(args):
     try:
-        status = requests.get(f"{API_URL}/scan/status").json()
+        status = requests.get(f"{API_URL}/scan/status", timeout=10).json()
         print("--- Status skanera scAnt ---")
         print(f"Zajęty skanowaniem: {'Tak' if status['is_scanning'] else 'Nie'}")
         print(f"Postęp:             {status['progress_percent']}%")
@@ -44,7 +44,7 @@ def get_status(args):
 def home_motors(args):
     try:
         print("Wymuszanie bazowania...")
-        response = requests.post(f"{API_URL}/motor/home")
+        response = requests.post(f"{API_URL}/motor/home", timeout=10)
         response.raise_for_status()
         print("Bazowanie osi zakończone.")
     except requests.exceptions.RequestException as e:
@@ -59,7 +59,7 @@ def fetch_data(args):
     
     print(f"Pobieranie listy plików z {api} dla projektu {project}...")
     try:
-        resp = requests.get(f"{api}/scan/files/{project}")
+        resp = requests.get(f"{api}/scan/files/{project}", timeout=10)
         resp.raise_for_status()
         files = resp.json()["files"]
     except Exception as e:
@@ -80,11 +80,24 @@ def fetch_data(args):
         local_path = os.path.join(out_dir, f)
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         if os.path.exists(local_path):
-            return
-        r = requests.get(url, stream=True)
-        with open(local_path, "wb") as out:
-            for chunk in r.iter_content(chunk_size=8192):
-                out.write(chunk)
+            return True
+        
+        for attempt in range(3):  # 3 próby
+            try:
+                r = requests.get(url, stream=True, timeout=30)
+                r.raise_for_status()
+                with open(local_path, "wb") as out:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            out.write(chunk)
+                return True
+            except requests.exceptions.RequestException as e:
+                print(f"Próba {attempt + 1}/3 nieudana dla {f}: {e}")
+                if attempt == 2:  # Ostatnia próba
+                    print(f"Ostateczny błąd pobierania {f}: {e}")
+                    return False
+                time.sleep(2 ** attempt)  # Exponential backoff
+        return False
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         for i, _ in enumerate(pool.map(download_file, files)):
