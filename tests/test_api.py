@@ -1,6 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-from api_server import app, is_scanning
+from api_server import app
 
 client = TestClient(app)
 

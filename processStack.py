@@ -18,6 +18,11 @@ import threading
 import time
 import subprocess
 
+# Zdarzenia do bezpiecznego zatrzymywania wątków (zamiast globalnych intów)
+focus_stop = threading.Event()
+stacking_stop = threading.Event()
+alpha_stop = threading.Event()
+
 basedir = os.path.dirname(__file__)
 
 class FocusCheckingThread(threading.Thread):
@@ -46,7 +51,7 @@ class StackingThread(threading.Thread):
         print("Exiting " + self.name)
 
 def process_data(threadName, q):
-    while not exitFlag:
+    while not focus_stop.is_set():
         queueLock.acquire()
         if not workQueue.empty():
             data = q.get()
@@ -141,7 +146,7 @@ def checkFocus(image_path, threshold, usable_images, rejected_images):
     return usable_images, rejected_images
 
 def process_stack_threaded(name, q):
-    while not exitFlag_stacking:
+    while not stacking_stop.is_set():
         queueLock.acquire()
         if not workQueue_stacking.empty():
             data = q.get()
@@ -426,7 +431,7 @@ def apply_local_contrast(img, grid_size=(7, 7), clip_limit=1.0):
     return cv2.cvtColor(np.array(sharpened), cv2.COLOR_GRAY2RGB)
 
 def createAlphaMask_threaded(threadName, q, edgeDetector):
-    while not exitFlag_alpha:
+    while not alpha_stop.is_set():
         queueLock_alpha.acquire()
         if not workQueue_alpha.empty():
             data = q.get()
@@ -752,7 +757,7 @@ if __name__ == "__main__":
             all_image_paths = os.listdir(images)
 
             # setup as many threads as there are (virtual) CPUs
-            exitFlag = 0
+            focus_stop.clear()
             num_virtual_cores = getThreads()
             threadList = createThreadList(num_virtual_cores)
             print("Found", num_virtual_cores, "(virtual) cores...")
@@ -792,7 +797,7 @@ if __name__ == "__main__":
                     pass
 
                 # Notify threads it's time to exit
-                exitFlag = 1
+                focus_stop.set()
 
                 # Wait for all threads to complete
                 for t in threads:
@@ -880,7 +885,7 @@ if __name__ == "__main__":
             """
 
             # setup as many threads as there are (virtual) CPUs
-            exitFlag_stacking = 0
+            stacking_stop.clear()
             # only use a fourth of the number of CPUs for stacking as hugin and enfuse utilise multi core processing in part
             threadList_stacking = createThreadList(int(min([num_virtual_cores / 4, 3])))
             print("Using", len(threadList_stacking), "threads for stacking...")
@@ -909,7 +914,7 @@ if __name__ == "__main__":
                 pass
 
             # Notify threads it's time to exit
-            exitFlag_stacking = 1
+            stacking_stop.set()
 
             # Wait for all threads to complete
             for t in threads:
@@ -948,7 +953,7 @@ if __name__ == "__main__":
             print("loaded edge detector...")
 
             # setup half as many threads as there are (virtual) CPUs
-            exitFlag_alpha = 0
+            alpha_stop.clear()
             num_virtual_cores = getThreads()
             threadList_alpha = createThreadList(int(num_virtual_cores/4))
             print("Found", num_virtual_cores, "(virtual) cores...")
@@ -976,7 +981,7 @@ if __name__ == "__main__":
                 pass
 
             # Notify threads it's time to exit
-            exitFlag_alpha = 1
+            alpha_stop.set()
 
             # Wait for all threads to complete
             for t in threads:

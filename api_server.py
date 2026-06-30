@@ -2,24 +2,26 @@ from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
+from contextlib import asynccontextmanager
 import logging
+import threading
 from scripts.Scanner_Controller import ScannerController
 from scripts.camera_controller import CameraController
 import os
 from pathlib import Path
 import watchdog
 
-app = FastAPI(title="scAnt API", description="API do sterowania skanerem 3D scAnt")
+# Zmienne środowiskowe dla ścieżek (z fallbackiem do Dockerowych domyślnych)
+SCANS_DIR = os.environ.get("SCANS_DIR", "/app/scans")
+STATIC_DIR = os.environ.get("STATIC_DIR", "/app/static")
 
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app):
     watchdog.start_watchdogs()
+    yield
+    # ew. cleanup przy shutdown
 
-os.makedirs("/app/scans", exist_ok=True)
-app.mount("/scans_data", StaticFiles(directory="/app/scans"), name="scans_data")
-
-os.makedirs("/app/static", exist_ok=True)
-app.mount("/gui", StaticFiles(directory="/app/static", html=True), name="gui")
+app = FastAPI(title="scAnt API", description="API do sterowania skanerem 3D scAnt", lifespan=lifespan)
 
 # Konfiguracja logowania (Console-First Logging)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -64,18 +66,26 @@ class ScanConfig(BaseModel):
             raise ValueError(f"{axis}_max ({v}) musi być większe niż {axis}_min ({min_val})")
         return v
 
-# Flaga blokująca inne polecenia w trakcie skanowania
-is_scanning = False
+# Flaga blokująca inne polecenia w trakcie skanowania (z synchronizacją)
+_scan_lock = threading.Lock()
+_is_scanning = False
+
+def _set_scanning(val: bool):
+    global _is_scanning
+    with _scan_lock:
+        _is_scanning = val
+
+def scanning_in_progress():
+    global _is_scanning
+    with _scan_lock:
+        return _is_scanning
 
 def run_scan_task(config: ScanConfig):
-    global is_scanning
+    _set_scanning(True)
     try:
-        is_scanning = True
-        
         # Katalog docelowy
         output_dir = Path.cwd() / "scans" / config.project_name
         os.makedirs(output_dir, exist_ok=True)
-        # scAnt wymaga stringa zakończonego slashem na chwilę obecną
         scAnt.outputFolder = str(output_dir) + "/"
         
         # Przekazanie ustawień zasięgu
@@ -91,13 +101,12 @@ def run_scan_task(config: ScanConfig):
     except Exception as e:
         logging.error(f"Skanowanie przerwane awarią: {e}")
     finally:
-        is_scanning = False
+        _set_scanning(False)
         logging.info(f"Proces skanowania {config.project_name} zakończony.")
 
 @app.post("/scan/start")
 def start_scan(config: ScanConfig, background_tasks: BackgroundTasks):
-    global is_scanning
-    if is_scanning:
+    if scanning_in_progress():
         raise HTTPException(status_code=400, detail="Skanowanie jest już w toku. Oczekuj na zakończenie.")
     
     background_tasks.add_task(run_scan_task, config)
@@ -106,7 +115,7 @@ def start_scan(config: ScanConfig, background_tasks: BackgroundTasks):
 @app.get("/scan/status")
 def get_status():
     return {
-        "is_scanning": is_scanning,
+        "is_scanning": scanning_in_progress(),
         "progress_percent": round(scAnt.getProgress(), 2),
         "images_taken": scAnt.images_taken,
         "images_to_take": scAnt.images_to_take
@@ -114,7 +123,7 @@ def get_status():
 
 @app.post("/camera/capture")
 def capture_single_image(output_path: str = "test_image.tif"):
-    if is_scanning:
+    if scanning_in_progress():
         raise HTTPException(status_code=400, detail="Zasób kamery zablokowany przez proces skanowania.")
     
     full_path = str(Path.cwd() / output_path)
@@ -123,7 +132,7 @@ def capture_single_image(output_path: str = "test_image.tif"):
 
 @app.post("/motor/home")
 def home_motors():
-    if is_scanning:
+    if scanning_in_progress():
         raise HTTPException(status_code=400, detail="Silniki zajęte przez proces skanowania.")
     scAnt.home()
     return {"message": "Zakończono bazowanie osi (G28)"}
@@ -134,7 +143,7 @@ class MotorMoveRequest(BaseModel):
 
 @app.post("/motor/move")
 def move_motor(req: MotorMoveRequest):
-    if is_scanning:
+    if scanning_in_progress():
         raise HTTPException(status_code=400, detail="Silniki zajęte przez proces skanowania.")
     if req.axis.upper() not in ["X", "Y", "Z"]:
         raise HTTPException(status_code=400, detail="Nieprawidłowa oś (tylko X, Y, Z).")
@@ -143,7 +152,7 @@ def move_motor(req: MotorMoveRequest):
 
 @app.post("/motor/disable")
 def disable_motors():
-    if is_scanning:
+    if scanning_in_progress():
         raise HTTPException(status_code=400, detail="Silniki zajęte przez proces skanowania.")
     scAnt.deEnergise()
     return {"message": "Silniki odblokowane (M84)"}
@@ -163,15 +172,15 @@ def video_stream():
 
 @app.get("/scan/projects")
 def list_projects():
-    """Zwraca listę projektów dostępnych w folderze /app/scans"""
-    if not os.path.exists("/app/scans"):
+    """Zwraca listę projektów dostępnych w folderze skanów"""
+    if not os.path.exists(SCANS_DIR):
         return {"projects": []}
-    return {"projects": [f.name for f in os.scandir("/app/scans") if f.is_dir()]}
+    return {"projects": [f.name for f in os.scandir(SCANS_DIR) if f.is_dir()]}
 
 @app.get("/scan/files/{project}")
 def list_files(project: str):
     """Zwraca listę wszystkich plików wewnątrz wybranego projektu"""
-    proj_path = Path("/app/scans") / project
+    proj_path = Path(SCANS_DIR) / project
     if not proj_path.exists() or not proj_path.is_dir():
         raise HTTPException(status_code=404, detail="Projekt nie znaleziony")
     
@@ -187,6 +196,12 @@ def list_files(project: str):
 def get_health():
     """Zwraca skonsolidowany status zdrowia sprzętu."""
     return watchdog.health_status
+
+# StaticFiles mount na końcu pliku (po trasach dynamicznych), by nie przechwytywały żądań
+os.makedirs(SCANS_DIR, exist_ok=True)
+app.mount("/scans_data", StaticFiles(directory=SCANS_DIR), name="scans_data")
+os.makedirs(STATIC_DIR, exist_ok=True)
+app.mount("/gui", StaticFiles(directory=STATIC_DIR, html=True), name="gui")
 
 if __name__ == "__main__":
     import uvicorn
