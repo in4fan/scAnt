@@ -5,6 +5,8 @@ from pydantic import BaseModel, field_validator
 from contextlib import asynccontextmanager
 import logging
 import threading
+import time
+from functools import wraps
 from scripts.Scanner_Controller import ScannerController
 from scripts.camera_controller import CameraController
 import os
@@ -14,6 +16,27 @@ import watchdog
 # Zmienne środowiskowe dla ścieżek (z fallbackiem do Dockerowych domyślnych)
 SCANS_DIR = os.environ.get("SCANS_DIR", "/app/scans")
 STATIC_DIR = os.environ.get("STATIC_DIR", "/app/static")
+
+# Prosty rate limiter (zapobiega przeciążeniu Moonrakera przy szybkim klikaniu)
+_rate_limit_store = {}
+_rate_limit_lock = threading.Lock()
+
+def rate_limit(max_calls: int = 3, per_seconds: int = 1):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            key = func.__name__
+            now = time.time()
+            with _rate_limit_lock:
+                window = _rate_limit_store.get(key, [])
+                window = [t for t in window if now - t < per_seconds]
+                if len(window) >= max_calls:
+                    raise HTTPException(status_code=429, detail="Zbyt wiele żądań. Poczekaj chwilę.")
+                window.append(now)
+                _rate_limit_store[key] = window
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
 
 @asynccontextmanager
 async def lifespan(app):
@@ -82,6 +105,7 @@ def scanning_in_progress():
 
 def run_scan_task(config: ScanConfig):
     _set_scanning(True)
+    scAnt.cancel_requested = False
     try:
         # Katalog docelowy
         output_dir = Path.cwd() / "scans" / config.project_name
@@ -122,6 +146,7 @@ def get_status():
     }
 
 @app.post("/camera/capture")
+@rate_limit(max_calls=2, per_seconds=3)
 def capture_single_image(output_path: str = "test_image.tif"):
     if scanning_in_progress():
         raise HTTPException(status_code=400, detail="Zasób kamery zablokowany przez proces skanowania.")
@@ -131,6 +156,7 @@ def capture_single_image(output_path: str = "test_image.tif"):
     return {"message": "Zdjęcie zrobione testowo", "path": full_path}
 
 @app.post("/motor/home")
+@rate_limit(max_calls=2, per_seconds=5)
 def home_motors():
     if scanning_in_progress():
         raise HTTPException(status_code=400, detail="Silniki zajęte przez proces skanowania.")
@@ -142,6 +168,7 @@ class MotorMoveRequest(BaseModel):
     distance: float
 
 @app.post("/motor/move")
+@rate_limit(max_calls=5, per_seconds=1)
 def move_motor(req: MotorMoveRequest):
     if scanning_in_progress():
         raise HTTPException(status_code=400, detail="Silniki zajęte przez proces skanowania.")
@@ -156,6 +183,20 @@ def disable_motors():
         raise HTTPException(status_code=400, detail="Silniki zajęte przez proces skanowania.")
     scAnt.deEnergise()
     return {"message": "Silniki odblokowane (M84)"}
+
+@app.post("/scan/cancel")
+def cancel_scan():
+    """Przerywa trwające skanowanie."""
+    if not scanning_in_progress():
+        raise HTTPException(status_code=400, detail="Brak aktywnego skanowania do anulowania.")
+    scAnt.cancel_requested = True
+    logging.info("Żądanie anulowania skanowania przyjęte.")
+    return {"message": "Skanowanie zostanie przerwane po zakończeniu bieżącego zdjęcia."}
+
+@app.get("/motor/position")
+def motor_position():
+    """Zwraca aktualną pozycję osi X/Y/Z z Moonrakera."""
+    return scAnt.get_position()
 
 import time
 def mjpeg_generator():

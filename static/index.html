@@ -97,12 +97,23 @@
         <div class="panel">
             <h2 style="margin-bottom: 1rem;">Podgląd na żywo (Ostrość)</h2>
             <img src="/camera/stream" class="camera-feed" alt="Brak sygnału wideo" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiPjxyZWN0IHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiIGZpbGw9IiMzMyMiLz48dGV4dCB4PSI1MCUiIHk9IjUwJSIgZmlsbD0iI2ZmZiIgZG9taW5hbnQtYmFzZWxpbmU9Im1pZGRsZSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+QnJhayBzeWduYcWCdTwvdGV4dD48L3N2Zz4='">
+            <button onclick="takeSnapshot()" style="width: 100%; margin-top: 0.5rem;">📸 Zrób Zdjęcie</button>
         </div>
 
         <!-- Kontrolki -->
         <div class="panel">
             <h2 style="margin-bottom: 1rem;">Kontrola Silników</h2>
             
+            <!-- Pozycja na żywo -->
+            <div class="axis-control">
+                <h3>Pozycja Osi <span style="font-weight:300;font-size:0.8rem;color:#94a3b8;">(odświeżanie co 2s)</span></h3>
+                <div id="positionDisplay" style="display:flex;gap:1rem;justify-content:center;padding:0.5rem 0;">
+                    <span>X: <strong id="posX">--</strong></span>
+                    <span>Y: <strong id="posY">--</strong></span>
+                    <span>Z: <strong id="posZ">--</strong></span>
+                </div>
+            </div>
+
             <div class="axis-control">
                 <h3>Oś Z (Wózek Ostrości)</h3>
                 <div class="button-group">
@@ -137,6 +148,7 @@
 
             <button onclick="homeAll()" style="width: 100%; margin-top: 1rem;">🏠 Bazuj Wszystkie Osie (Home)</button>
             <button class="danger" onclick="disableMotors()" style="width: 100%;">🛑 Zwolnij Silniki (Ręczna Kalibracja)</button>
+            <button class="danger" onclick="cancelScan()" style="width: 100%; margin-top: 0.5rem;">⏹ Anuluj Skanowanie</button>
 
             <div id="status" class="status">Gotowy</div>
         </div>
@@ -145,9 +157,11 @@
     <script>
         const statusEl = document.getElementById('status');
 
-        function setStatus(msg) {
+        function setStatus(msg, permanent = false) {
             statusEl.innerText = msg;
-            setTimeout(() => { statusEl.innerText = 'Gotowy'; }, 3000);
+            if (!permanent) {
+                setTimeout(() => { statusEl.innerText = 'Gotowy'; }, 3000);
+            }
         }
 
         async function move(axis, distance) {
@@ -189,6 +203,44 @@
                 setStatus('Błąd: ' + err.message);
             }
         }
+
+        async function takeSnapshot() {
+            try {
+                statusEl.innerText = `Wykonywanie zdjęcia...`;
+                const res = await fetch('/camera/capture?output_path=snapshot_test.tif', { method: 'POST' });
+                const data = await res.json();
+                if(!res.ok) throw new Error(data.detail || 'Błąd');
+                setStatus('Zdjęcie zapisane');
+            } catch (err) {
+                setStatus('Błąd: ' + err.message);
+            }
+        }
+
+        async function cancelScan() {
+            try {
+                statusEl.innerText = `Anulowanie skanowania...`;
+                const res = await fetch('/scan/cancel', { method: 'POST' });
+                const data = await res.json();
+                if(!res.ok) throw new Error(data.detail || 'Błąd');
+                setStatus('Skanowanie anulowane', true);
+            } catch (err) {
+                setStatus('Błąd: ' + err.message);
+            }
+        }
+
+        // Polling pozycji osi co 2 sekundy
+        async function pollPosition() {
+            try {
+                const res = await fetch('/motor/position');
+                if(!res.ok) return;
+                const data = await res.json();
+                document.getElementById('posX').innerText = data.x != null ? data.x.toFixed(1) : '--';
+                document.getElementById('posY').innerText = data.y != null ? data.y.toFixed(1) : '--';
+                document.getElementById('posZ').innerText = data.z != null ? data.z.toFixed(1) : '--';
+            } catch(e) { /* ignoruj błędy przy starcie */ }
+        }
+        setInterval(pollPosition, 2000);
+        pollPosition();
     </script>
 </body>
 </html>

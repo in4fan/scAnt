@@ -4,7 +4,15 @@
 import cv2
 import os
 import shutil
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+logger = logging.getLogger("processStack")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    ch = logging.StreamHandler()
+    ch.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s"))
+    logger.addHandler(ch)
 
 from PIL import Image, ImageEnhance
 from skimage import measure
@@ -208,17 +216,17 @@ def stack_images(input_paths, check_focus, threshold=10.0, sharpen=False, num_th
     pics = len(usable_images)
     stacks = []
 
-    print("\nSorting in-focus images into stacks...")
+    logger.info("Sorting in-focus images into stacks...")
     for i in range(pics):
         image_str_align = ""
         current_stack_name = usable_images[0][:-15]
-        print("Created stack:", current_stack_name)
+        logger.info("Created stack: %s", current_stack_name)
 
         if not os.path.exists(output_folder.joinpath(current_stack_name)):
             os.makedirs(output_folder.joinpath(current_stack_name))
-            print("made corresponding temporary folder!")
+            logger.info("made corresponding temporary folder!")
         else:
-            print("corresponding temporary folder already exists!")
+            logger.info("corresponding temporary folder already exists!")
 
         path_num = 0
         for path in usable_images:

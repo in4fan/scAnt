@@ -33,6 +33,7 @@ class ScannerController:
 
         self.completedRotations = 0
         self.completedStacks = 0
+        self.cancel_requested = False
         
         # Inicjalizacja zmiennych na potrzeby postępu
         self.images_taken = 0
@@ -142,11 +143,18 @@ class ScannerController:
         logging.info("Rozpoczynamy skanowanie...")
         self.images_to_take = len(self.scan_pos[0]) * len(self.scan_pos[1]) * len(self.scan_pos[2])
         self.images_taken = 0
+        self.cancel_requested = False
 
         for posX in self.scan_pos[0]:
+            if self.cancel_requested:
+                logging.info("Skanowanie anulowane przez użytkownika.")
+                break
             self.moveToPosition(0, posX)
             
             for posY in self.scan_pos[1]:
+                if self.cancel_requested:
+                    logging.info("Skanowanie anulowane przez użytkownika.")
+                    break
                 # W przypadku stołu obrotowego możemy sumować pełne obroty,
                 # ale dla Klippera łatwiej zresetować oś pozycją G92 lub używać pozycji relatywnych.
                 # Zostawiamy logikę absolutną tak jak było w oryginale, 
@@ -155,6 +163,9 @@ class ScannerController:
                 self.moveToPosition(1, current_y)
                 
                 for posZ in self.scan_pos[2]:
+                    if self.cancel_requested:
+                        logging.info("Skanowanie anulowane przez użytkownika.")
+                        break
                     self.moveToPosition(2, posZ)
                     
                     img_name = os.path.join(
@@ -177,6 +188,21 @@ class ScannerController:
         self.moveToPosition(0, 19)
         self.moveToPosition(1, self.completedRotations * self.stepper_maxPos[1])
         self.moveToPosition(2, -20)
+
+    def get_position(self):
+        """Odczytuje aktualną pozycję osi z Moonrakera."""
+        try:
+            resp = requests.get(
+                f"{self.moonraker_url}/printer/objects/query?gcode_move",
+                timeout=3
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            pos = data.get("result", {}).get("status", {}).get("gcode_move", {}).get("position", [None, None, None])
+            return {"x": pos[0], "y": pos[1], "z": pos[2]}
+        except Exception as e:
+            logging.error(f"Błąd odczytu pozycji z Moonrakera: {e}")
+            return {"x": None, "y": None, "z": None}
 
 if __name__ == '__main__':
     from camera_controller import CameraController
