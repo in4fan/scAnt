@@ -7,7 +7,7 @@ try:
 except ImportError:
     cv2 = None
 
-logger = logger.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 try:
     from picamera2 import Picamera2

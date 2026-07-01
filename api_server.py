@@ -55,6 +55,9 @@ async def lifespan(app):
 
 app = FastAPI(title="scAnt API", description="API do sterowania skanerem 3D scAnt", lifespan=lifespan)
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -162,17 +165,17 @@ def run_scan_task(config: ScanConfig):
         scAnt.setScanRange(1, config.y_min, config.y_max, config.y_step)
         scAnt.setScanRange(2, config.z_min, config.z_max, config.z_step)
         
-        logging.info("Rozpoczęcie procedury skanowania zlecenia z API...")
+        logger.info("Rozpoczęcie procedury skanowania zlecenia z API...")
         scAnt.home()
         scAnt.runScan()
         scAnt.deEnergise()
     except HardwareCommunicationError as e:
-        logging.error(f"Skanowanie przerwane błędem komunikacji sprzętowej: {e}")
+        logger.error(f"Skanowanie przerwane błędem komunikacji sprzętowej: {e}")
     except Exception as e:
-        logging.error(f"Skanowanie przerwane awarią: {e}")
+        logger.error(f"Skanowanie przerwane awarią: {e}")
     finally:
         _set_scanning(False)
-        logging.info(f"Proces skanowania {config.project_name} zakończony.")
+        logger.info(f"Proces skanowania {config.project_name} zakończony.")
 
 @app.post("/scan/start")
 def start_scan(config: ScanConfig, background_tasks: BackgroundTasks):
@@ -255,7 +258,7 @@ def cancel_scan():
         raise HTTPException(status_code=400, detail="Brak aktywnego skanowania do anulowania.")
     scAnt = _get_scanner()
     scAnt.cancel_requested = True
-    logging.info("Żądanie anulowania skanowania przyjęte.")
+    logger.info("Żądanie anulowania skanowania przyjęte.")
     return {"message": "Skanowanie zostanie przerwane po zakończeniu bieżącego zdjęcia."}
 
 @app.get("/motor/position")
