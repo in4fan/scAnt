@@ -1,0 +1,9 @@
+# scAnt worker (post-processing)
+opencv-contrib-python-headless
+scikit-image
+imutils
+Pillow
+numpy
+PyYAML
+runpod
+pytest

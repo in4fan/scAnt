@@ -26,6 +26,8 @@ def show_me_what_you_got(img_path):
     """ get the tags in dict """
     for tag in process.stdout:
         line = tag.strip().split(':')
+        if not line or not line[0].strip():
+            continue
         infoDict[line[0].strip()] = line[-1].strip()
 
     for k, v in infoDict.items():

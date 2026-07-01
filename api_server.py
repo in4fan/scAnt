@@ -1,9 +1,11 @@
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 from contextlib import asynccontextmanager
 import logging
+import asyncio
 import threading
 import time
 from functools import wraps
@@ -41,13 +43,25 @@ def rate_limit(max_calls: int = 3, per_seconds: int = 1):
 @asynccontextmanager
 async def lifespan(app):
     watchdog.start_watchdogs()
+    os.makedirs(SCANS_DIR, exist_ok=True)
+    app.mount("/scans_data", StaticFiles(directory=SCANS_DIR), name="scans_data")
+    os.makedirs(STATIC_DIR, exist_ok=True)
+    app.mount("/gui", StaticFiles(directory=STATIC_DIR, html=True), name="gui")
     yield
-    # ew. cleanup przy shutdown
+    cam = getattr(app.state, "camera", None)
+    if cam:
+        cam.exit_cam()
+    asyncio.create_task(watchdog.stop_watchdogs())
 
 app = FastAPI(title="scAnt API", description="API do sterowania skanerem 3D scAnt", lifespan=lifespan)
 
-# Konfiguracja logowania (Console-First Logging)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 _hardware_lock = threading.Lock()
 
@@ -250,18 +264,17 @@ def motor_position():
     scAnt = _get_scanner()
     return scAnt.get_position()
 
-import time
-def mjpeg_generator():
+async def mjpeg_generator():
     cam = _get_camera()
     while True:
         frame = cam.capture_jpeg_frame()
         if frame:
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-        time.sleep(0.1)  # max ~10 FPS
+        await asyncio.sleep(0.1)  # max ~10 FPS
 
 @app.get("/camera/stream")
-def video_stream():
+async def video_stream():
     return StreamingResponse(mjpeg_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 @app.get("/scan/projects")
@@ -290,12 +303,6 @@ def list_files(project: str):
 def get_health():
     """Zwraca skonsolidowany status zdrowia sprzętu."""
     return watchdog.health_status
-
-# StaticFiles mount na końcu pliku (po trasach dynamicznych), by nie przechwytywały żądań
-os.makedirs(SCANS_DIR, exist_ok=True)
-app.mount("/scans_data", StaticFiles(directory=SCANS_DIR), name="scans_data")
-os.makedirs(STATIC_DIR, exist_ok=True)
-app.mount("/gui", StaticFiles(directory=STATIC_DIR, html=True), name="gui")
 
 if __name__ == "__main__":
     import uvicorn

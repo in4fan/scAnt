@@ -29,20 +29,12 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
 
-# Instalacja pakietów Pythonowych do przetwarzania obrazu
-RUN pip install --no-cache-dir \
-    opencv-contrib-python-headless \
-    scikit-image \
-    imutils \
-    Pillow \
-    numpy \
-    PyYAML \
-    runpod \
-    pytest
+# Najpierw requirements dla lepszego cache'owania
+COPY requirements-worker.txt .
+RUN pip install --no-cache-dir -r requirements-worker.txt
 
 # Kopiowanie kodu aplikacji
 COPY . /app
 
-# Domyślnie uruchamia powłokę bash, czekając w nieskończoność
-# by móc przyjmować komendy wykonywane przez np. `docker compose exec`
-CMD ["tail", "-f", "/dev/null"]
+# Domyślnie czeka w nieskończoność na komendy z `docker compose exec`
+CMD ["sleep", "infinity"]

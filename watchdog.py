@@ -4,13 +4,6 @@ import logging
 import os
 import time
 
-# Konfiguracja loggera przekazującego do stdout
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - WATCHDOG - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()]
-)
-
 logger = logging.getLogger("watchdog")
 
 # Konfiguracja adresu Moonrakera (konfigurowalny przez zmienną środowiskową)
@@ -90,9 +83,22 @@ async def log_uptime():
         logger.info(f"[SYSTEM OK] Uptime: {uptime}s | Klipper: {klipper_status} | Kamera: {cam_status}")
         await asyncio.sleep(60)  # Raportuj do logów co minutę
 
+_watchdog_tasks = []
+
 def start_watchdogs():
     """Uruchamia wszystkie zadania w pętli zdarzeń asyncio."""
+    global _watchdog_tasks
     logger.info("Uruchamianie wbudowanych Watchdogów (Klipper, Camera)...")
-    asyncio.create_task(ping_klipper())
-    asyncio.create_task(ping_camera())
-    asyncio.create_task(log_uptime())
+    _watchdog_tasks = [
+        asyncio.create_task(ping_klipper()),
+        asyncio.create_task(ping_camera()),
+        asyncio.create_task(log_uptime()),
+    ]
+
+async def stop_watchdogs():
+    """Anuluje wszystkie zadania watchdogów."""
+    for task in _watchdog_tasks:
+        task.cancel()
+    if _watchdog_tasks:
+        await asyncio.gather(*_watchdog_tasks, return_exceptions=True)
+        _watchdog_tasks.clear()

@@ -5,7 +5,7 @@ import logging
 import numpy as np
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 class HardwareCommunicationError(RuntimeError):
@@ -54,7 +54,7 @@ class ScannerController:
 
     def send_gcode(self, gcode: str):
         """Wysyła polecenie G-Code do Klippera przez Moonrakera"""
-        logging.debug(f"Wysyłanie G-Code: {gcode}")
+        logger.debug(f"Wysyłanie G-Code: {gcode}")
         try:
             response = requests.post(
                 f"{self.moonraker_url}/printer/gcode/script", 
@@ -63,7 +63,7 @@ class ScannerController:
             )
             response.raise_for_status()
         except requests.exceptions.RequestException as e:
-            logging.error(f"Błąd komunikacji z Moonrakerem przy wysyłaniu '{gcode}': {e}")
+            logger.error(f"Błąd komunikacji z Moonrakerem przy wysyłaniu '{gcode}': {e}")
             raise HardwareCommunicationError(
                 f"Nie udało się wysłać komendy do Moonrakera: {gcode}"
             ) from e
@@ -79,7 +79,7 @@ class ScannerController:
 
     def deEnergise(self):
         """Wyłącza silniki krokowe (odpowiednik M18 / M84)"""
-        logging.info("Wyłączanie silników...")
+        logger.info("Wyłączanie silników...")
         self.send_gcode("M84")
 
     def home(self, stepper=None):
@@ -87,10 +87,10 @@ class ScannerController:
         axis = ""
         if stepper is not None:
             axis = self.stepper_names[stepper]
-            logging.info(f"Bazowanie osi {axis}...")
+            logger.info(f"Bazowanie osi {axis}...")
             self.send_gcode(f"G28 {axis}")
         else:
-            logging.info("Bazowanie wszystkich osi...")
+            logger.info("Bazowanie wszystkich osi...")
             self.send_gcode("G28")
             
         self.wait_for_moves(settle_time=1.0)
@@ -104,7 +104,7 @@ class ScannerController:
             pos = self.stepper_minPos[stepper]
 
         axis = self.stepper_names[stepper]
-        logging.info(f"Ruch osi {axis} na pozycję {pos}")
+        logger.info(f"Ruch osi {axis} na pozycję {pos}")
         
         # Używamy G0 z wybraną posuwnością (F). F3000 = 50mm/s
         self.send_gcode(f"G0 {axis}{pos} F3000")
@@ -112,7 +112,7 @@ class ScannerController:
 
     def moveRelative(self, axis_name: str, distance: float):
         """Przesuwa daną oś o podany dystans (ruch relatywny)"""
-        logging.info(f"Ruch relatywny osi {axis_name} o {distance}")
+        logger.info(f"Ruch relatywny osi {axis_name} o {distance}")
         # G91 włącza tryb relatywny, po ruchu wracamy do absolutnego G90
         self.send_gcode("G91")
         self.send_gcode(f"G0 {axis_name.upper()}{distance} F3000")
@@ -128,14 +128,14 @@ class ScannerController:
 
         self.scan_stepSize[stepper] = step
         if step <= 0:
-            logging.error(f"Krok skanowania dla osi {self.stepper_names[stepper]} musi być > 0 (otrzymano {step}).")
+            logger.error(f"Krok skanowania dla osi {self.stepper_names[stepper]} musi być > 0 (otrzymano {step}).")
             self.scan_pos[stepper] = np.array([min_val])
             return
 
-        self.scan_pos[stepper] = np.array(np.arange(int(min_val), int(max_val), int(self.scan_stepSize[stepper])), dtype=int)
+        self.scan_pos[stepper] = np.array(np.arange(int(min_val), int(max_val) + 1, int(self.scan_stepSize[stepper])), dtype=int)
         
         if len(self.scan_pos[stepper]) == 0:
-            logging.warning(f"Błąd wejścia: brak punktów skanowania dla osi {self.stepper_names[stepper]} (min={min_val}, max={max_val}, step={step}).")
+            logger.warning(f"Błąd wejścia: brak punktów skanowania dla osi {self.stepper_names[stepper]} (min={min_val}, max={max_val}, step={step}).")
             self.scan_pos[stepper] = np.array([min_val])
 
     def getProgress(self):
@@ -147,7 +147,7 @@ class ScannerController:
         self.cam = cam
 
     def runScan(self):
-        logging.info("Rozpoczynamy skanowanie...")
+        logger.info("Rozpoczynamy skanowanie...")
         self.completedRotations = 0
         self.completedStacks = 0
         self.images_to_take = len(self.scan_pos[0]) * len(self.scan_pos[1]) * len(self.scan_pos[2])
@@ -157,24 +157,21 @@ class ScannerController:
 
         for posX in self.scan_pos[0]:
             if self.cancel_requested:
-                logging.info("Skanowanie anulowane przez użytkownika.")
+                logger.info("Skanowanie anulowane przez użytkownika.")
                 break
             self.moveToPosition(0, posX)
             
             for posY in self.scan_pos[1]:
                 if self.cancel_requested:
-                    logging.info("Skanowanie anulowane przez użytkownika.")
+                    logger.info("Skanowanie anulowane przez użytkownika.")
                     break
-                # W przypadku stołu obrotowego możemy sumować pełne obroty,
-                # ale dla Klippera łatwiej zresetować oś pozycją G92 lub używać pozycji relatywnych.
-                # Zostawiamy logikę absolutną tak jak było w oryginale, 
-                # ale z wartościami odpowiednimi dla nowej jednostki.
-                current_y = posY + self.completedRotations * self.stepper_maxPos[1]
+                # Dla stołu obrotowego pozycje Y cyklicznie wracają do zera
+                current_y = posY + (self.completedRotations * self.stepper_maxPos[1]) % 360
                 self.moveToPosition(1, current_y)
                 
                 for posZ in self.scan_pos[2]:
                     if self.cancel_requested:
-                        logging.info("Skanowanie anulowane przez użytkownika.")
+                        logger.info("Skanowanie anulowane przez użytkownika.")
                         break
                     self.moveToPosition(2, posZ)
                     
@@ -188,15 +185,15 @@ class ScannerController:
                     
                     self.images_taken += 1
                     self.progress = self.getProgress()
-                    logging.info(f"Postęp skanowania: {self.progress:.1f}%")
+                    logger.info(f"Postęp skanowania: {self.progress:.1f}%")
 
                 self.completedStacks += 1
             self.completedRotations += 1
 
-        logging.info("Skanowanie zakończone. Powrót do pozycji bazowej.")
+        logger.info("Skanowanie zakończone. Powrót do pozycji bazowej.")
         # Powrót do pozycji początkowej (domyślnej) - wartości do dostosowania!
         self.moveToPosition(0, 19)
-        self.moveToPosition(1, self.completedRotations * self.stepper_maxPos[1])
+        self.moveToPosition(1, (self.completedRotations * self.stepper_maxPos[1]) % 360)
         self.moveToPosition(2, -20)
 
     def get_position(self):
@@ -211,13 +208,13 @@ class ScannerController:
             pos = data.get("result", {}).get("status", {}).get("gcode_move", {}).get("position", [None, None, None])
             return {"x": pos[0], "y": pos[1], "z": pos[2]}
         except requests.exceptions.RequestException as e:
-            logging.error(f"Błąd odczytu pozycji z Moonrakera: {e}")
+            logger.error(f"Błąd odczytu pozycji z Moonrakera: {e}")
             raise HardwareCommunicationError(f"Nie udało się odczytać pozycji: {e}") from e
 
 if __name__ == '__main__':
     from camera_controller import CameraController
     
-    logging.info("Testowanie komunikacji Klipper/Moonraker oraz RPI-HQ-CAMERA")
+    logger.info("Testowanie komunikacji Klipper/Moonraker oraz RPI-HQ-CAMERA")
     
     scAnt = ScannerController()
     cam = CameraController()
@@ -244,4 +241,4 @@ if __name__ == '__main__':
     # Wyłączenie silników i kamery
     scAnt.deEnergise()
     scAnt.cam.exit_cam()
-    logging.info("Demo testowe zakończone sukcesem!")
+    logger.info("Demo testowe zakończone sukcesem!")

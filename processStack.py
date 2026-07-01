@@ -37,7 +37,7 @@ def parse_bool_arg(value):
         return value
 
     normalized = str(value).strip().lower()
-    if normalized in {"1", "true", "t", "yes", "y", "on", ""}:
+    if normalized in {"1", "true", "t", "yes", "y", "on"}:
         return True
     if normalized in {"0", "false", "f", "no", "n", "off", "none"}:
         return False
@@ -58,10 +58,12 @@ def getThreads():
             # Użyj cgroups jeśli dostępny
             try:
                 with open('/sys/fs/cgroup/cpu.max', 'r') as f:
-                    # Format: "max period period_usec usage_usec"
+                    # Format: "$QUOTA $PERIOD" (microseconds), quota may be "max"
                     parts = f.read().strip().split()
                     if len(parts) >= 2 and parts[0].isdigit():
-                        return int(parts[0])
+                        quota = int(parts[0])
+                        period = int(parts[1])
+                        return max(1, round(quota / period))
             except Exception:
                 pass
             return 1
@@ -92,6 +94,10 @@ def variance_of_laplacian(image):
 
 def checkFocus(image_path, threshold, usable_images, rejected_images):
     image = cv2.imread(str(image_path))
+    if image is None:
+        logger.warning(f"Nie można odczytać pliku: {image_path}")
+        rejected_images.append(image_path.name)
+        return usable_images, rejected_images
 
     # original window size (due to input image)
     # = 2448 x 2048 -> time to size it down!
@@ -197,7 +203,7 @@ def process_stack(data, output_folder, path_to_external, params):
     return output_path
 
 
-def stack_images(input_paths, check_focus, threshold=10.0, sharpen=False, num_threads=1):
+def stack_images(input_paths, check_focus, threshold=10.0, sharpen=False, num_threads=1, use_experimental_stacking=True):
     images = Path(input_paths[0]).parent
 
     all_image_paths = []
@@ -276,7 +282,7 @@ def stack_images(input_paths, check_focus, threshold=10.0, sharpen=False, num_th
     # Alignment and stacking — parallel gdy num_threads > 1
     stacked_images_paths = []
     parameters = {"sharpen": sharpen,
-                  "use_experimental_stacking": True}
+                  "use_experimental_stacking": use_experimental_stacking}
 
     if num_threads > 1:
         stack_workers = max(1, min(num_threads // 4, 3))
@@ -504,13 +510,6 @@ def createAlphaMask(data, edgeDetector, threadName=None, params = {
     # Add the masked foreground and background.
     cutout = cv2.add(foreground, background)
 
-    cv2.imwrite(data[:-4] + '_contour.png', cutout)
-    cutout = cv2.imread(data[:-4] + '_contour.png')
-
-    Path(data[:-4] + '_contour.png').unlink(missing_ok=True)
-
-    # cutout = cv2.imread(source, 1)  # TEMPORARY
-
     cutout_blurred = cv2.GaussianBlur(cutout, (5, 5), 0)
 
     gray = cv2.cvtColor(cutout_blurred, cv2.COLOR_BGR2GRAY)
@@ -703,7 +702,8 @@ if __name__ == "__main__":
         all_image_paths = [str(images / f) for f in os.listdir(images)]
         num_cores = getThreads()
         stack_images(all_image_paths, check_focus=focus_check, threshold=focus_threshold,
-                     sharpen=args["sharpen"], num_threads=num_cores)
+                     sharpen=args["sharpen"], num_threads=num_cores,
+                     use_experimental_stacking=args["use_experimental_stacking"])
         print("Stacking finalised! Czas:", time.time() - start)
 
     if mask_check:

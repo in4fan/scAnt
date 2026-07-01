@@ -1,0 +1,10 @@
+# scAnt API server
+fastapi
+uvicorn
+requests
+numpy
+pydantic
+picamera2
+opencv-python-headless
+pytest
+httpx

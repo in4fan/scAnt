@@ -25,7 +25,7 @@ def start_scan(args):
                 status = requests.get(f"{API_URL}/scan/status").json()
                 sys.stdout.write(f"\rPostęp: {status['progress_percent']}% ({status['images_taken']}/{status['images_to_take']})")
                 sys.stdout.flush()
-                if not status['is_scanning'] and status['progress_percent'] > 0:
+                if not status['is_scanning']:
                     print("\nSkanowanie zakończone!")
                     break
     except requests.exceptions.RequestException as e:

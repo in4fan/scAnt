@@ -16,20 +16,9 @@ RUN apt-get update && apt-get install -y \
 # Ustawiamy katalog roboczy
 WORKDIR /app
 
-# Instalacja niezbędnych paczek Pythona bezpośrednio z pip
-# Zależności do API: fastapi, uvicorn, pydantic
-# Zależności logiki: requests, numpy
-# Obsługa kamery: picamera2 (wymaga wcześniejszej instalacji systemowej libcamera-dev)
-RUN pip install --no-cache-dir \
-    fastapi \
-    uvicorn \
-    requests \
-    numpy \
-    pydantic \
-    picamera2 \
-    opencv-python-headless \
-    pytest \
-    httpx
+# Najpierw requirements.txt dla lepszego cache'owania warstw Docker
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Kopiowanie całego kodu z repozytorium do kontenera
 COPY . /app

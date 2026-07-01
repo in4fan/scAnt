@@ -1,5 +1,7 @@
 # scAnt Project Rules
 
+See also `AGENTS.md` (root) for commands and quick reference.
+
 Poniższe reguły to nasze główne ustalenia architektoniczne dla tego obszaru roboczego (projektu scAnt). Agent AI powinien się do nich zawsze stosować.
 
 1. **Sprzęt Sterujący:** Projekt jest w całości oparty o Raspberry Pi jako centralną jednostkę obliczeniową. Za ruch odpowiada płyta BTT SKR Pico z oprogramowaniem Klipper.

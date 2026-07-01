@@ -7,13 +7,12 @@ try:
 except ImportError:
     cv2 = None
 
-# Ustawienie podstawowego logowania, by logi trafiały na stdout/stderr zgodnie z AGENTS.md
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logger.getLogger(__name__)
 
 try:
     from picamera2 import Picamera2
 except ImportError:
-    logging.warning("Biblioteka picamera2 nie jest zainstalowana lub skrypt nie jest uruchomiony na Raspberry Pi. Kamera będzie działać w trybie symulacji.")
+    logger.warning("Biblioteka picamera2 nie jest zainstalowana lub skrypt nie jest uruchomiony na Raspberry Pi. Kamera będzie działać w trybie symulacji.")
     Picamera2 = None
 
 class CameraController:
@@ -29,9 +28,9 @@ class CameraController:
                 config = self.picam2.create_still_configuration()
                 self.picam2.configure(config)
                 self.picam2.start()
-                logging.info("Kamera RPI-HQ uruchomiona pomyślnie.")
+                logger.info("Kamera RPI-HQ uruchomiona pomyślnie.")
             except Exception as e:
-                logging.error(f"Nie udało się zainicjalizować kamery picamera2: {e}")
+                logger.error(f"Nie udało się zainicjalizować kamery picamera2: {e}")
                 self.picam2 = None
 
     def configure_exposure(self, exposure_time_us=None, gain=None, awb_mode='auto'):
@@ -42,7 +41,7 @@ class CameraController:
         awb_mode: Tryb balansu bieli.
         """
         if self.picam2 is None:
-            logging.debug(f"Symulacja: configure_exposure(exposure={exposure_time_us}, gain={gain}, awb={awb_mode})")
+            logger.debug(f"Symulacja: configure_exposure(exposure={exposure_time_us}, gain={gain}, awb={awb_mode})")
             return
             
         controls = {}
@@ -58,28 +57,30 @@ class CameraController:
         
         try:
             self.picam2.set_controls(controls)
-            logging.info(f"Parametry kamery zostały zaktualizowane: {controls}")
+            logger.info(f"Parametry kamery zostały zaktualizowane: {controls}")
         except Exception as e:
-            logging.error(f"Błąd podczas ustawiania parametrów kamery: {e}")
+            logger.error(f"Błąd podczas ustawiania parametrów kamery: {e}")
 
     def capture_image(self, img_name: str):
         """
         Główna metoda używana przez kontroler skanera do robienia zdjęcia.
         """
         if self.picam2 is None:
-            logging.info(f"Symulacja zrzutu ekranu: Zapisuję plik na sucho -> {img_name}")
+            logger.info(f"Symulacja zrzutu ekranu: Zapisuję plik na sucho -> {img_name}")
             time.sleep(0.1) # Symulacja czasu robienia zdjęcia
-            # Tworzymy pusty plik testowy, aby proces skanowania nie wywalił się z błędem braku pliku
-            with open(img_name, "w") as f:
-                f.write("To jest pusty plik symulacyjny kamery.")
+            # Generujemy minimalny poprawny obrazek testowy
+            dummy_img = np.zeros((480, 640, 3), dtype=np.uint8)
+            if cv2 is not None:
+                cv2.putText(dummy_img, "SYMULACJA", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                cv2.imwrite(img_name, dummy_img)
             return
             
         try:
             # capture_file robi zdjęcie w formacie zadanym przez rozszerzenie img_name (np. .jpg, .tif)
             self.picam2.capture_file(img_name)
-            logging.info(f"Zdjęcie zapisane pomyślnie: {img_name}")
+            logger.info(f"Zdjęcie zapisane pomyślnie: {img_name}")
         except Exception as e:
-            logging.error(f"Błąd podczas robienia zdjęcia ({img_name}): {e}")
+            logger.error(f"Błąd podczas robienia zdjęcia ({img_name}): {e}")
 
     def start_preview(self):
         """
@@ -87,7 +88,7 @@ class CameraController:
         """
         if self.picam2:
             self.picam2.start()
-            logging.info("Podgląd kamery uruchomiony.")
+            logger.info("Podgląd kamery uruchomiony.")
 
     def stop_preview(self):
         """
@@ -95,7 +96,7 @@ class CameraController:
         """
         if self.picam2:
             self.picam2.stop()
-            logging.info("Podgląd kamery zatrzymany.")
+            logger.info("Podgląd kamery zatrzymany.")
 
     def exit_cam(self):
         """
@@ -104,7 +105,7 @@ class CameraController:
         if self.picam2:
             self.picam2.stop()
             self.picam2.close()
-            logging.info("Połączenie z kamerą zamknięte.")
+            logger.info("Połączenie z kamerą zamknięte.")
 
     def capture_jpeg_frame(self):
         """Pobiera pojedynczą klatkę jako strumień bajtów JPEG dla GUI."""
@@ -126,5 +127,5 @@ class CameraController:
             ret, jpeg = cv2.imencode('.jpg', array_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
             return jpeg.tobytes()
         except Exception as e:
-            logging.error(f"Błąd podczas pobierania klatki wideo: {e}")
+            logger.error(f"Błąd podczas pobierania klatki wideo: {e}")
             return b""
