@@ -1,4 +1,4 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,36 +13,41 @@ from scripts.Scanner_Controller import ScannerController, HardwareCommunicationE
 from scripts.camera_controller import CameraController
 import os
 from pathlib import Path
-import watchdog
+import health_monitor
 
 # Zmienne środowiskowe dla ścieżek (z fallbackiem do Dockerowych domyślnych)
 SCANS_DIR = os.environ.get("SCANS_DIR", "/app/scans")
 STATIC_DIR = os.environ.get("STATIC_DIR", "/app/static")
 
-# Prosty rate limiter (zapobiega przeciążeniu Moonrakera przy szybkim klikaniu)
-_rate_limit_store = {}
-_rate_limit_lock = threading.Lock()
+# Rate limiter jako klasa Depend — zachowuje sygnaturę endpointu w OpenAPI
+class RateLimiter:
+    """Prosty rate limiter jako FastAPI Depends (zapobiega przeciążeniu Moonrakera)."""
+    def __init__(self, max_calls: int = 3, per_seconds: int = 1):
+        self.max_calls = max_calls
+        self.per_seconds = per_seconds
+        self._store: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
 
-def rate_limit(max_calls: int = 3, per_seconds: int = 1):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            key = func.__name__
-            now = time.time()
-            with _rate_limit_lock:
-                window = _rate_limit_store.get(key, [])
-                window = [t for t in window if now - t < per_seconds]
-                if len(window) >= max_calls:
-                    raise HTTPException(status_code=429, detail="Zbyt wiele żądań. Poczekaj chwilę.")
-                window.append(now)
-                _rate_limit_store[key] = window
-            return func(*args, **kwargs)
-        return wrapper
-    return decorator
+    def __call__(self, endpoint_name: str = ""):
+        key = endpoint_name or "default"
+        now = time.time()
+        with self._lock:
+            window = self._store.get(key, [])
+            window = [t for t in window if now - t < self.per_seconds]
+            if len(window) >= self.max_calls:
+                raise HTTPException(status_code=429, detail="Zbyt wiele żądań. Poczekaj chwilę.")
+            window.append(now)
+            self._store[key] = window
+        return True
+
+# Instancje rate limitera dla różnych endpointów
+_motor_limiter = RateLimiter(max_calls=5, per_seconds=1)
+_camera_limiter = RateLimiter(max_calls=2, per_seconds=3)
+_home_limiter = RateLimiter(max_calls=2, per_seconds=5)
 
 @asynccontextmanager
 async def lifespan(app):
-    watchdog.start_watchdogs()
+    health_monitor.start_watchdogs()
     os.makedirs(SCANS_DIR, exist_ok=True)
     app.mount("/scans_data", StaticFiles(directory=SCANS_DIR), name="scans_data")
     os.makedirs(STATIC_DIR, exist_ok=True)
@@ -51,7 +56,7 @@ async def lifespan(app):
     cam = getattr(app.state, "camera", None)
     if cam:
         cam.exit_cam()
-    asyncio.create_task(watchdog.stop_watchdogs())
+    await health_monitor.stop_watchdogs()
 
 app = FastAPI(title="scAnt API", description="API do sterowania skanerem 3D scAnt", lifespan=lifespan)
 
@@ -70,6 +75,19 @@ _hardware_lock = threading.Lock()
 
 
 def _ensure_hardware():
+    """Thread-safe initialization of scanner and camera hardware.
+    
+    Uses double-checked locking pattern to minimize lock contention
+    after hardware is initialized.
+    """
+    # First check without lock (fast path)
+    scanner = getattr(app.state, "scanner", None)
+    camera = getattr(app.state, "camera", None)
+    
+    if scanner is not None and camera is not None and getattr(scanner, "cam", None) is not None:
+        return scanner, camera
+    
+    # Second check with lock (slow path)
     with _hardware_lock:
         scanner = getattr(app.state, "scanner", None)
         camera = getattr(app.state, "camera", None)
@@ -200,19 +218,19 @@ def get_status():
     }
 
 @app.post("/camera/capture")
-@rate_limit(max_calls=2, per_seconds=3)
-def capture_single_image(output_path: str = "test_image.tif"):
+def capture_single_image(output_path: str = "test_image.tif", _rate: bool = Depends(_camera_limiter)):
     if scanning_in_progress():
         raise HTTPException(status_code=400, detail="Zasób kamery zablokowany przez proces skanowania.")
     
-    full_path = str(Path.cwd() / output_path)
+    # Sanitize output_path — zapis tylko wewnątrz SCANS_DIR (zapobiega path traversal)
+    safe_name = Path(output_path).name
+    full_path = str(Path(SCANS_DIR) / safe_name)
     cam = _get_camera()
     cam.capture_image(full_path)
     return {"message": "Zdjęcie zrobione testowo", "path": full_path}
 
 @app.post("/motor/home")
-@rate_limit(max_calls=2, per_seconds=5)
-def home_motors():
+def home_motors(_rate: bool = Depends(_home_limiter)):
     if scanning_in_progress():
         raise HTTPException(status_code=400, detail="Silniki zajęte przez proces skanowania.")
     try:
@@ -227,8 +245,7 @@ class MotorMoveRequest(BaseModel):
     distance: float
 
 @app.post("/motor/move")
-@rate_limit(max_calls=5, per_seconds=1)
-def move_motor(req: MotorMoveRequest):
+def move_motor(req: MotorMoveRequest, _rate: bool = Depends(_motor_limiter)):
     if scanning_in_progress():
         raise HTTPException(status_code=400, detail="Silniki zajęte przez proces skanowania.")
     if req.axis.upper() not in ["X", "Y", "Z"]:
@@ -305,7 +322,7 @@ def list_files(project: str):
 @app.get("/health")
 def get_health():
     """Zwraca skonsolidowany status zdrowia sprzętu."""
-    return watchdog.health_status
+    return health_monitor.health_status
 
 if __name__ == "__main__":
     import uvicorn

@@ -87,8 +87,8 @@ class CameraController:
         Włącza podgląd wideo.
         """
         if self.picam2:
-            self.picam2.start()
-            logger.info("Podgląd kamery uruchomiony.")
+            # picamera2.start() jest już wywołany w __init__(), więc nie wołamy go ponownie
+            logger.info("Podgląd kamery już aktywny (picamera2.start() wywołane w __init__).")
 
     def stop_preview(self):
         """

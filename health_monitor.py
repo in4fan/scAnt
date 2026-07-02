@@ -4,7 +4,7 @@ import logging
 import os
 import time
 
-logger = logging.getLogger("watchdog")
+logger = logging.getLogger("health_monitor")
 
 # Konfiguracja adresu Moonrakera (konfigurowalny przez zmienną środowiskową)
 MOONRAKER_URL = os.environ.get("MOONRAKER_URL", "http://localhost:7125")

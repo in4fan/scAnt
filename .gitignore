@@ -1,10 +1,17 @@
 # python environment specific
 *.pyc
-.idea/*
-GUI/.idea/*
-GUI/__pycache__/*
-scripts/.idea/*
-scripts/__pycache__/*
+__pycache__/
+*.egg-info/
+.venv/
+.idea/
+*.swp
+*.swo
 
 # jupyter related
-.ipynb_checkpoints/*
+.ipynb_checkpoints/
+
+# scan data (large files, user-generated)
+scans/
+
+# IDE
+.vscode/

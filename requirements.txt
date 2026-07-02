@@ -1,10 +1,13 @@
-# scAnt API server
+# scAnt API server — common dependencies
 fastapi
 uvicorn
 requests
 numpy
 pydantic
-picamera2
 opencv-python-headless
 pytest
 httpx
+
+# picamera2 — RPi-specific, install only on Raspberry Pi (ARM)
+# On PC/CI, skip this line or use: pip install -r requirements.txt --no-deps
+# picamera2

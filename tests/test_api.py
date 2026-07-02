@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 import api_server
+import health_monitor
 
 
 class DummyCamera:
@@ -36,7 +37,8 @@ class DummyScanner:
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setattr(api_server.watchdog, "start_watchdogs", lambda: None)
+    monkeypatch.setattr(health_monitor, "start_watchdogs", lambda: None)
+    monkeypatch.setattr(health_monitor, "stop_watchdogs", lambda: None)
     api_server.app.state.scanner = DummyScanner()
     api_server.app.state.camera = DummyCamera()
     api_server.app.state.scanner.initCam(api_server.app.state.camera)

@@ -20,11 +20,13 @@ class ScannerController:
         self.moonraker_url = moonraker_url
         self.stepper_names = ["X", "Y", "Z"]
 
-        # UWAGA: W przeciwieństwie do starego systemu (który operował na mikrokrokach np. 50000),
-        # Klipper operuje na milimetrach (mm) lub stopniach (w zależności od rotation_distance).
-        # Poniższe limity i zakresy należy dostosować do fizycznych wymiarów w mm/stopniach!
-        self.stepper_maxPos = [45, 160, 0]   # Przykładowe wartości w mm/deg
+        # Domyślne limity bezpieczeństwa (fallback jeśli nie uda się pobrać z Moonrakera)
+        # Wartości te powinny być zgodne z konfiguracją Klippera w skr_pico_klipper.cfg
+        self.stepper_maxPos = [45, 160, 0]   # mm/deg
         self.stepper_minPos = [0, -160, -450]
+
+        # Pobierz rzeczywiste limity z Klippera (jeśli dostępne)
+        self._fetch_klipper_limits()
 
         # Ustawienia skanowania (krok w mm/deg)
         self.scan_stepSize = [5, 8, 50]
@@ -52,28 +54,79 @@ class ScannerController:
         sign = "n" if val_int < 0 else "p"
         return f"{sign}{abs(val_int):05d}"
 
-    def send_gcode(self, gcode: str):
-        """Wysyła polecenie G-Code do Klippera przez Moonrakera"""
-        logger.debug(f"Wysyłanie G-Code: {gcode}")
+    def _fetch_klipper_limits(self):
+        """Pobiera rzeczywiste limity pozycji z konfiguracji Klippera przez Moonraker."""
         try:
-            response = requests.post(
-                f"{self.moonraker_url}/printer/gcode/script", 
-                json={"script": gcode},
+            resp = requests.get(
+                f"{self.moonraker_url}/printer/objects/query?configfile",
                 timeout=5
             )
-            response.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Błąd komunikacji z Moonrakerem przy wysyłaniu '{gcode}': {e}")
-            raise HardwareCommunicationError(
-                f"Nie udało się wysłać komendy do Moonrakera: {gcode}"
-            ) from e
+            resp.raise_for_status()
+            data = resp.json()
+            config = data.get("result", {}).get("status", {}).get("configfile", {}).get("config", {})
+            
+            # Parsowanie limitów dla każdej osi
+            for axis in ["x", "y", "z"]:
+                section = config.get(f"stepper_{axis}", {})
+                if section:
+                    pos_min = section.get("position_min")
+                    pos_max = section.get("position_max")
+                    if pos_min is not None and pos_max is not None:
+                        idx = self.stepper_names.index(axis.upper())
+                        self.stepper_minPos[idx] = float(pos_min)
+                        self.stepper_maxPos[idx] = float(pos_max)
+                        logger.info(f"Zaktualizowano limity osi {axis.upper()}: min={pos_min}, max={pos_max}")
+        except Exception as e:
+            logger.warning(f"Nie udało się pobrać limitów z Klippera: {e}. Użyto wartości domyślnych.")
+
+    def send_gcode(self, gcode: str):
+        """Wysyła polecenie G-Code do Klippera przez Moonrakera z retry logic."""
+        logger.debug(f"Wysyłanie G-Code: {gcode}")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    f"{self.moonraker_url}/printer/gcode/script", 
+                    json={"script": gcode},
+                    timeout=5
+                )
+                response.raise_for_status()
+                return  # Sukces
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Błąd komunikacji z Moonrakerem przy wysyłaniu '{gcode}' (próba {attempt+1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)  # Czekaj przed retry
+                else:
+                    raise HardwareCommunicationError(
+                        f"Nie udało się wysłać komendy do Moonrakera po {max_retries} próbach: {gcode}"
+                    ) from e
 
     def wait_for_moves(self, settle_time=0.5):
         """
         Czeka na zakończenie ruchu (M400) i dodaje czas na ustabilizowanie drgań,
         co jest kluczowe w makrofotografii (settle time).
+        Polluje status toolhead aby upewnić się że ruch się zakończył.
         """
         self.send_gcode("M400")
+        
+        # Polluj status toolhead aby sprawdzić czy ruch się zakończył
+        max_polls = 20
+        for _ in range(max_polls):
+            try:
+                resp = requests.get(
+                    f"{self.moonraker_url}/printer/objects/query?toolhead",
+                    timeout=3
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    status = data.get("result", {}).get("status", {}).get("toolhead", {})
+                    # Sprawdź czy homing jest zakończony
+                    if not status.get("homing", False):
+                        break
+            except Exception:
+                pass
+            time.sleep(0.25)
+        
         # Proste opóźnienie na wygaszenie drgań mechanicznych przed zrobieniem zdjęcia.
         time.sleep(settle_time)
 
@@ -97,10 +150,12 @@ class ScannerController:
 
     def moveToPosition(self, stepper, pos):
         """Przesuwa daną oś na podaną pozycję absolutną"""
-        # Limity bezpieczeństwa
+        # Limity bezpieczeństwa (z pobranych wartości z Klippera lub domyślnych)
         if pos > self.stepper_maxPos[stepper]:
+            logger.warning(f"Pozycja {pos} przekracza max {self.stepper_maxPos[stepper]} — ograniczono.")
             pos = self.stepper_maxPos[stepper]
         elif pos < self.stepper_minPos[stepper]:
+            logger.warning(f"Pozycja {pos} poniżej min {self.stepper_minPos[stepper]} — ograniczono.")
             pos = self.stepper_minPos[stepper]
 
         axis = self.stepper_names[stepper]
@@ -121,9 +176,12 @@ class ScannerController:
 
     def setScanRange(self, stepper, min_val, max_val, step):
         """Oblicza listę pozycji do zeskanowania dla konkretnej osi"""
+        # Walidacja z limitami z Klippera
         if max_val > self.stepper_maxPos[stepper]:
+            logger.warning(f"max_val={max_val} przekracza limit {self.stepper_maxPos[stepper]} — ograniczono.")
             max_val = self.stepper_maxPos[stepper]
-        elif min_val < self.stepper_minPos[stepper]:
+        if min_val < self.stepper_minPos[stepper]:
+            logger.warning(f"min_val={min_val} poniżej limitu {self.stepper_minPos[stepper]} — ograniczono.")
             min_val = self.stepper_minPos[stepper]
 
         self.scan_stepSize[stepper] = step

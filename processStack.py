@@ -127,8 +127,9 @@ def checkFocus(image_path, threshold, usable_images, rejected_images):
     return usable_images, rejected_images
 
 def process_stack(data, output_folder, path_to_external, params):
-    stack_name = data.split(" ")[1]
-    stack_name = Path(stack_name).name[:-15]
+    # data is now a list of paths (not a space-separated string)
+    first_path = data[0] if isinstance(data, list) else data.split(" ")[0]
+    stack_name = Path(first_path).name[:-15]
 
     temp_output_folder = output_folder.joinpath(stack_name)
 
@@ -146,19 +147,25 @@ def process_stack(data, output_folder, path_to_external, params):
     #     stack_params += " --jpgquality=" + params["jpgquality"]
     
 
+    # Convert list to space-separated string for subprocess commands
+    if isinstance(data, list):
+        data_str = " ".join(str(p) for p in data)
+    else:
+        data_str = data
+
     if used_platform != "Linux" and params["use_experimental_stacking"]:
-        cmd = [str(path_to_external / "focus-stack" / "focus-stack")] + data.split() + ["--output=" + output_path]
+        cmd = [str(path_to_external / "focus-stack" / "focus-stack")] + data_str.split() + ["--output=" + output_path]
         subprocess.run(cmd, check=True)
     else:
         align_out_prefix = str(temp_output_folder.joinpath(stack_name)) + "OUT"
-        align_cmd = ["align_image_stack", "-m", "-x", "-c", "200", "-a", align_out_prefix] + data.split()
+        align_cmd = ["align_image_stack", "-m", "-x", "-c", "200", "-a", align_out_prefix] + data_str.split()
         subprocess.run(align_cmd, check=True)
 
         image_str_focus = ""
         temp_files = []
         print("\nFocus stacking...")
 
-        num_images_in_stack = len(data.split(" ")) - 1
+        num_images_in_stack = len(data_str.split(" "))
 
         # go through list in reverse order (better results of focus stacking)
         for img in range(num_images_in_stack):
@@ -297,8 +304,9 @@ def stack_images(input_paths, check_focus, threshold=10.0, sharpen=False, num_th
 
     print("Deleting temporary folders")
     for stack in stacks:
-        stack_name = stack.split(" ")[1]
-        stack_name = Path(stack_name).name[:-15]
+        # stack is now a list of paths
+        first_path = stack[0] if isinstance(stack, list) else stack.split(" ")[0]
+        stack_name = Path(first_path).name[:-15]
         shutil.rmtree(output_folder.joinpath(stack_name), ignore_errors=True)
         print("removed  ...", stack_name)
 
@@ -439,12 +447,12 @@ def createAlphaMask(data, edgeDetector, threadName=None, params = {
     blurred_float = blurred.astype(np.float32) / 255.0
     edges = edgeDetector.detectEdges(blurred_float) * 255.0
     if threadName:
-        print("%s : Filtering out salt & pepper grain of %s" % (threadName, data.split("\\")[-1]))
+        print("%s : Filtering out salt & pepper grain of %s" % (threadName, Path(data).name))
     edges_8u = np.asarray(edges, np.uint8)
     filterOutSaltPepperNoise(edges_8u)
 
     if threadName:
-        print("%s : Extracting largest coherent contour of %s" % (threadName, data.split("\\")[-1]))
+        print("%s : Extracting largest coherent contour of %s" % (threadName, Path(data).name))
     contour = findSignificantContour(edges_8u)
     # Draw the contour on the original image
     contourImg = np.copy(src)
@@ -471,7 +479,7 @@ def createAlphaMask(data, edgeDetector, threadName=None, params = {
     # cv2.imwrite(data[:-4] + '_trimap.png', trimap_print)
 
     if threadName:
-        print("%s : Creating mask from contour of %s" % (threadName, data.split("\\")[-1]))
+        print("%s : Creating mask from contour of %s" % (threadName, Path(data).name))
     # run grabcut
     bgdModel = np.zeros((1, 65), np.float64)
     fgdModel = np.zeros((1, 65), np.float64)
@@ -535,7 +543,7 @@ def createAlphaMask(data, edgeDetector, threadName=None, params = {
     #cv2.imwrite(data[:-4] + '_threshed.png', 1 - image_bin, [cv2.IMWRITE_PNG_BILEVEL, 1])
 
     print("cleaning up thresholding result, using connected component labelling of %s"
-          % (data.split("\\")[-1]))
+          % (Path(data).name))
 
     # remove black artifacts
     blobs_labels = measure.label(cv2.GaussianBlur(image_bin, (5, 5), 0), background=0)
